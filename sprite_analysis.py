@@ -112,16 +112,17 @@ class SpriteAnalyzer:
         """Calculate diamond vertices using the already-computed isometric lines instead of duplicating work"""
         from spritesheet_model import SingleDiamondData, Point
         
-        # Use frame-specific Z-offset
+        # Use frame-specific Z-offset and diamond width
         effective_upper_z = self.model.get_effective_upper_z_offset(sprite_index)
+        effective_diamond_width = self.model.get_effective_diamond_width(sprite_index)
         
         # Calculate legacy measurements for compatibility
         effective_height = bbox.height - effective_upper_z
-        predicted_flat_height = bbox.width * 0.5
+        predicted_flat_height = effective_diamond_width * 0.5
         diamond_height = effective_height - predicted_flat_height
         diamond_line_y = bbox.y + effective_upper_z + predicted_flat_height
         upper_z_line_y = bbox.y + effective_upper_z if effective_upper_z > 0 else None
-        diamond_width = bbox.width
+        diamond_width = effective_diamond_width
         lower_z_offset = predicted_flat_height
         
         # Extract vertices from already-computed isometric lines
@@ -136,13 +137,15 @@ class SpriteAnalyzer:
             south_x = bbox.x + (bottom_left.x + bottom_right.x) // 2
             south_y = bbox.y + max(bottom_left.y, bottom_right.y)  # Use the lower point
             
-            # North vertex: Calculate from South using geometry (this is reliable)
+            # North vertex: Calculate from South using effective diamond width
             north_x = south_x
-            north_y = south_y - bbox.width // 2
+            north_y = south_y - effective_diamond_width // 2
             
-            # East/West vertices: Extract from isometric line endpoints (the actual raycast results!)
-            east_x, east_y = bbox.x + bbox.width - 1, bbox.y + effective_upper_z + int(predicted_flat_height)  # fallback
-            west_x, west_y = bbox.x, bbox.y + effective_upper_z + int(predicted_flat_height)  # fallback
+            # East/West vertices: Calculate centered diamond with effective width
+            diamond_center_x = bbox.x + bbox.width // 2
+            east_x = diamond_center_x + effective_diamond_width // 2
+            west_x = diamond_center_x - effective_diamond_width // 2
+            east_y = west_y = bbox.y + effective_upper_z + int(predicted_flat_height)
             
             # Use actual raycast endpoints if available - CORRECT ASSIGNMENTS
             if 'NE' in isometric_lines and isometric_lines['NE']:
@@ -162,20 +165,20 @@ class SpriteAnalyzer:
                     west_y = bbox.y + west_point.y
         else:
             # Fallback to hardcoded calculation if contact points missing
-            south_x = bbox.x + bbox.width // 2
+            diamond_center_x = bbox.x + bbox.width // 2
+            south_x = diamond_center_x
             south_y = bbox.y + bbox.height - 1
-            north_x = south_x
-            north_y = south_y - bbox.width // 2
-            east_x = bbox.x + bbox.width - 1
-            east_y = bbox.y + effective_upper_z + int(predicted_flat_height)
-            west_x = bbox.x
-            west_y = east_y
+            north_x = diamond_center_x
+            north_y = south_y - effective_diamond_width // 2
+            east_x = diamond_center_x + effective_diamond_width // 2
+            west_x = diamond_center_x - effective_diamond_width // 2
+            east_y = west_y = bbox.y + effective_upper_z + int(predicted_flat_height)
         
         # Lower diamond center
         lower_center_x = bbox.x + bbox.width // 2
         lower_center_y = bbox.y + bbox.height // 2
         
-        # Create lower diamond data using the extracted/computed vertices
+        # Create lower diamond data using the extracted/computed vertices (midpoints computed at save time)
         lower_diamond = SingleDiamondData(
             north_vertex=Point(x=north_x, y=north_y),
             south_vertex=Point(x=south_x, y=south_y),

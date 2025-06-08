@@ -30,6 +30,10 @@ class SpriteRenderer:
         self.selected_vertex = 1  # 1=N, 2=S, 3=E, 4=W
         self.selected_diamond = 'lower'  # 'lower' or 'upper'
         self.manual_vertices = {}  # Dictionary to store manual vertex overrides per sprite
+        
+        # Custom keypoints mode (F3 mode)
+        self.custom_keypoints_mode = False
+        self.custom_keypoints = {}  # Dictionary to store custom keypoints per sprite: {sprite_index: {'keypoint_name': (x, y)}}
     
     def _clear_sprite_display_cache(self):
         """Clear the entire sprite display cache"""
@@ -43,7 +47,7 @@ class SpriteRenderer:
     
     def _get_cache_key(self, sprite_index: int, pixeloid_mult: int, alpha_threshold: int,
                        show_overlay: bool, show_diamond: bool, upper_lines_mode: bool,
-                       show_diamond_vertices: bool, effective_upper_z: int, pan_x: int, pan_y: int) -> tuple:
+                       show_diamond_vertices: bool, effective_upper_z: int, pan_x: int, pan_y: int, model: Optional[SpritesheetModel] = None) -> tuple:
         """Generate a cache key for the sprite display parameters"""
         # Include manual vertex mode and manual vertex data in cache key
         manual_vertices_key = None
@@ -57,10 +61,27 @@ class SpriteRenderer:
                     for diamond, vertices in sorted(manual_data.items())
                 )
         
+        # Include custom keypoints in cache key
+        custom_keypoints_key = None
+        if self.custom_keypoints_mode and sprite_index in self.custom_keypoints:
+            custom_data = self.custom_keypoints[sprite_index]
+            if custom_data:
+                custom_keypoints_key = tuple(sorted(custom_data.items()))
+        
+        # Include manual diamond width in cache key since it affects rendering
+        manual_diamond_width_key = None
+        if model:
+            current_sprite = model.get_current_sprite()
+            if current_sprite and current_sprite.manual_diamond_width is not None:
+                manual_diamond_width_key = current_sprite.manual_diamond_width
+            elif model.manual_diamond_width is not None:
+                manual_diamond_width_key = ('global', model.manual_diamond_width)
+        
         return (sprite_index, pixeloid_mult, alpha_threshold, show_overlay,
                 show_diamond, upper_lines_mode, show_diamond_vertices, effective_upper_z,
                 pan_x, pan_y, self.manual_vertex_mode, manual_vertices_key,
-                self.show_diamond_lines, self.show_raycast_analysis)
+                self.show_diamond_lines, self.show_raycast_analysis,
+                self.custom_keypoints_mode, custom_keypoints_key, manual_diamond_width_key)
     
     def _limit_cache_size(self):
         """Remove oldest cache entries if cache size exceeds limit"""
@@ -69,6 +90,53 @@ class SpriteRenderer:
             keys_to_remove = list(self._sprite_display_cache.keys())[:-self._cache_size_limit]
             for key in keys_to_remove:
                 del self._sprite_display_cache[key]
+    
+    def _calculate_expanded_bounds(self, current_sprite, model):
+        """Calculate expanded bounds to fit manual diamond width visualization and manual vertex positions"""
+        if not current_sprite.bbox or not current_sprite.diamond_info:
+            return None
+        
+        bbox = current_sprite.bbox
+        effective_diamond_width = model.get_effective_diamond_width(model.current_sprite_index)
+        
+        # Calculate diamond bounds
+        diamond_center_x = bbox.x + bbox.width // 2
+        diamond_left = diamond_center_x - effective_diamond_width // 2
+        diamond_right = diamond_center_x + effective_diamond_width // 2
+        
+        # Start with diamond and bbox bounds
+        expanded_left = min(bbox.x, diamond_left)
+        expanded_right = max(bbox.x + bbox.width, diamond_right)
+        expanded_top = bbox.y
+        expanded_bottom = bbox.y + bbox.height
+        
+        # Check manual vertex positions to extend bounds further if needed
+        sprite_key = model.current_sprite_index
+        manual_overrides = self.manual_vertices.get(sprite_key, {})
+        
+        for diamond_level in ['lower', 'upper']:
+            level_vertices = manual_overrides.get(diamond_level, {})
+            for vertex_name, (abs_x, abs_y) in level_vertices.items():
+                # Expand bounds to include manual vertex positions
+                expanded_left = min(expanded_left, abs_x)
+                expanded_right = max(expanded_right, abs_x)
+                expanded_top = min(expanded_top, abs_y)
+                expanded_bottom = max(expanded_bottom, abs_y)
+        
+        # Calculate final expanded dimensions
+        expanded_width = expanded_right - expanded_left
+        expanded_height = expanded_bottom - expanded_top
+        
+        expanded_bounds = {
+            'x': expanded_left,
+            'y': expanded_top,
+            'width': expanded_width,
+            'height': expanded_height,
+            'original_bbox': bbox,
+            'diamond_extends': expanded_width > bbox.width or expanded_height > bbox.height
+        }
+        
+        return expanded_bounds
     
     def draw_sprite_display(self, screen: pygame.Surface, model: Optional[SpritesheetModel], analyzer, left_panel_width: int):
         """Draw the current sprite with pixeloid rendering in the center area (cached)"""
@@ -87,6 +155,9 @@ class SpriteRenderer:
         if sprite_rect.width <= 0 or sprite_rect.height <= 0:
             return
         
+        # Calculate expanded bounds for manual diamond width visualization
+        expanded_bounds = self._calculate_expanded_bounds(current_sprite, model)
+        
         # Generate cache key for current rendering parameters
         effective_upper_z = model.get_effective_upper_z_offset(model.current_sprite_index)
         cache_key = self._get_cache_key(
@@ -99,7 +170,8 @@ class SpriteRenderer:
             model.show_diamond_vertices,
             effective_upper_z,
             model.pan_x,
-            model.pan_y
+            model.pan_y,
+            model
         )
         
         # Check if we have a cached surface for these parameters
@@ -110,12 +182,21 @@ class SpriteRenderer:
             screen.blit(cached_surface, (left_panel_width, 0))
             screen.set_clip(None)
         else:
+            # Determine rendering dimensions based on expanded bounds
+            render_width = self.DRAWING_AREA_WIDTH
+            render_height = self.DRAWING_AREA_HEIGHT
+            
+            # If diamond extends beyond bbox, we might need larger rendering area
+            if expanded_bounds and expanded_bounds['diamond_extends']:
+                # For now, keep the same drawing area but adjust sprite positioning
+                pass
+            
             # Create a new surface to render to for caching
-            cache_surface = pygame.Surface((self.DRAWING_AREA_WIDTH, self.DRAWING_AREA_HEIGHT))
+            cache_surface = pygame.Surface((render_width, render_height))
             cache_surface.fill((40, 40, 40))  # Match background color
             
-            # Render to the cache surface using the original logic
-            self._render_sprite_to_surface(cache_surface, sprite_surface, sprite_rect, current_sprite, model)
+            # Render to the cache surface with expanded bounds information
+            self._render_sprite_to_surface(cache_surface, sprite_surface, sprite_rect, current_sprite, model, expanded_bounds)
             
             # Calculate clipping rectangle
             drawing_x = left_panel_width
@@ -164,7 +245,7 @@ class SpriteRenderer:
         screen.blit(text_surface, (text_x, text_y))
     
     def _render_sprite_to_surface(self, surface: pygame.Surface, sprite_surface: pygame.Surface,
-                                 sprite_rect: pygame.Rect, current_sprite, model: Optional[SpritesheetModel]):
+                                 sprite_rect: pygame.Rect, current_sprite, model: Optional[SpritesheetModel], expanded_bounds=None):
         """Render sprite content to the given surface (used for caching)"""
         if not model:
             return
@@ -173,11 +254,28 @@ class SpriteRenderer:
         display_width = sprite_rect.width * model.pixeloid_multiplier
         display_height = sprite_rect.height * model.pixeloid_multiplier
         
-        # Center the sprite in the surface, apply panning
-        base_sprite_x = (self.DRAWING_AREA_WIDTH - display_width) // 2
-        base_sprite_y = (self.DRAWING_AREA_HEIGHT - display_height) // 2
-        sprite_x = base_sprite_x + model.pan_x
-        sprite_y = base_sprite_y + model.pan_y
+        # Adjust sprite positioning if using expanded bounds for diamond visualization
+        if expanded_bounds and expanded_bounds['diamond_extends']:
+            # Calculate expanded display dimensions
+            expanded_display_width = expanded_bounds['width'] * model.pixeloid_multiplier
+            expanded_display_height = expanded_bounds['height'] * model.pixeloid_multiplier
+            
+            # Center the expanded area, then offset for original sprite position
+            base_expanded_x = (self.DRAWING_AREA_WIDTH - expanded_display_width) // 2
+            base_expanded_y = (self.DRAWING_AREA_HEIGHT - expanded_display_height) // 2
+            
+            # Calculate sprite offset within expanded area
+            bbox_offset_x = (expanded_bounds['original_bbox'].x - expanded_bounds['x']) * model.pixeloid_multiplier
+            bbox_offset_y = (expanded_bounds['original_bbox'].y - expanded_bounds['y']) * model.pixeloid_multiplier
+            
+            sprite_x = base_expanded_x + bbox_offset_x + model.pan_x
+            sprite_y = base_expanded_y + bbox_offset_y + model.pan_y
+        else:
+            # Center the sprite in the surface, apply panning (original logic)
+            base_sprite_x = (self.DRAWING_AREA_WIDTH - display_width) // 2
+            base_sprite_y = (self.DRAWING_AREA_HEIGHT - display_height) // 2
+            sprite_x = base_sprite_x + model.pan_x
+            sprite_y = base_sprite_y + model.pan_y
         
         # Calculate padding in pixeloids
         padding_pixeloids = 10 * model.pixeloid_multiplier
@@ -459,6 +557,10 @@ class SpriteRenderer:
         # Draw diamond vertices if enabled OR if in manual vertex mode (independent of diamond lines)
         if (model.show_diamond_vertices or self.manual_vertex_mode) and current_sprite.diamond_info:
             self._draw_unified_diamond_vertices(surface, sprite_x, sprite_y, scaled_bbox, current_sprite, pixeloid_mult, model)
+        
+        # Draw custom keypoints if in custom keypoints mode
+        if self.custom_keypoints_mode:
+            self._draw_custom_keypoints(surface, sprite_x, sprite_y, current_sprite, pixeloid_mult, model)
     
     def _draw_unified_diamond_vertices(self, surface: pygame.Surface, sprite_x, sprite_y, scaled_bbox, current_sprite, pixeloid_mult, model: SpritesheetModel):
         """Single unified function to draw diamond vertices (both algorithmic and manual)"""
@@ -894,3 +996,91 @@ class SpriteRenderer:
         """Get vertex name from number"""
         names = {1: 'North', 2: 'South', 3: 'East', 4: 'West'}
         return names.get(vertex_num, 'Unknown')
+    
+    def _draw_custom_keypoints(self, surface: pygame.Surface, sprite_x, sprite_y, current_sprite, pixeloid_mult, model: SpritesheetModel):
+        """Draw custom keypoints with distinctive appearance and labels"""
+        # Get keypoints from the model's sprite data (loaded from file) or renderer's dictionary (manual entry)
+        sprite_key = model.current_sprite_index
+        keypoints = {}
+        
+        # Priority: model's sprite data (from loaded file) > renderer's manual keypoints
+        if current_sprite and current_sprite.custom_keypoints:
+            keypoints.update({name: (point.x, point.y) for name, point in current_sprite.custom_keypoints.items()})
+        
+        # Add any manual keypoints from renderer (F3 mode additions)
+        if sprite_key in self.custom_keypoints:
+            keypoints.update(self.custom_keypoints[sprite_key])
+        
+        if not keypoints:
+            return
+        
+        # Initialize font for keypoint labels if not already done
+        if not self._vertex_font:
+            self._vertex_font = pygame.font.Font(None, max(12, pixeloid_mult + 2))
+        
+        keypoint_size = max(pixeloid_mult + 2, 6)  # Slightly larger than vertices
+        
+        for keypoint_name, (abs_x, abs_y) in keypoints.items():
+            # Convert absolute coordinates to screen coordinates
+            screen_x = sprite_x + abs_x * pixeloid_mult
+            screen_y = sprite_y + abs_y * pixeloid_mult
+            
+            # Check if within drawing area bounds
+            if not (0 <= screen_x < self.DRAWING_AREA_WIDTH and 0 <= screen_y < self.DRAWING_AREA_HEIGHT):
+                continue
+            
+            # Draw keypoint as a distinctive star shape in magenta
+            self._draw_star_shape(surface, screen_x, screen_y, keypoint_size, (255, 0, 255))
+            
+            # Draw keypoint label
+            self._draw_keypoint_label(surface, keypoint_name, screen_x, screen_y, keypoint_size)
+    
+    def _draw_star_shape(self, surface, x, y, size, color):
+        """Draw a star shape for custom keypoints"""
+        center_x = x + size // 2
+        center_y = y + size // 2
+        
+        # Draw a 4-pointed star (cross + diagonal cross)
+        half_size = size // 2
+        
+        # Main cross (+)
+        pygame.draw.line(surface, color,
+                        (center_x - half_size, center_y),
+                        (center_x + half_size, center_y), 2)
+        pygame.draw.line(surface, color,
+                        (center_x, center_y - half_size),
+                        (center_x, center_y + half_size), 2)
+        
+        # Diagonal cross (x)
+        diagonal_offset = int(half_size * 0.7)  # Slightly smaller diagonals
+        pygame.draw.line(surface, color,
+                        (center_x - diagonal_offset, center_y - diagonal_offset),
+                        (center_x + diagonal_offset, center_y + diagonal_offset), 2)
+        pygame.draw.line(surface, color,
+                        (center_x - diagonal_offset, center_y + diagonal_offset),
+                        (center_x + diagonal_offset, center_y - diagonal_offset), 2)
+    
+    def _draw_keypoint_label(self, surface: pygame.Surface, label: str, keypoint_x: int, keypoint_y: int, keypoint_size: int):
+        """Draw a text label for a custom keypoint"""
+        if not self._vertex_font:
+            return
+        
+        # Render the text
+        text_surface = self._vertex_font.render(label, True, (255, 255, 255))  # White text
+        text_rect = text_surface.get_rect()
+        
+        # Position label to the right and slightly below the keypoint
+        label_x = keypoint_x + keypoint_size + 4
+        label_y = keypoint_y + keypoint_size // 2 - text_rect.height // 2
+        
+        # Ensure label stays within drawing area bounds
+        label_x = max(0, min(label_x, self.DRAWING_AREA_WIDTH - text_rect.width))
+        label_y = max(0, min(label_y, self.DRAWING_AREA_HEIGHT - text_rect.height))
+        
+        # Draw background rectangle for better text visibility
+        bg_rect = pygame.Rect(label_x - 1, label_y - 1, text_rect.width + 2, text_rect.height + 2)
+        pygame.draw.rect(surface, (0, 0, 0, 200), bg_rect)  # Semi-transparent black background
+        pygame.draw.rect(surface, (255, 0, 255), bg_rect, 1)  # Magenta border to match star
+        
+        # Draw the text
+        surface.blit(text_surface, (label_x, label_y))

@@ -67,6 +67,12 @@ class SingleDiamondData(BaseModel):
     west_vertex: Point = Field(..., description="West corner of the diamond (left point)")
     center: Point = Field(..., description="Center point of the diamond for positioning")
     z_offset: float = Field(..., description="Z elevation offset from sprite base in pixels")
+    
+    # NEW: Optional midpoints (won't break existing code)
+    north_east_midpoint: Optional[Point] = Field(default=None, description="Midpoint between north and east vertices")
+    east_south_midpoint: Optional[Point] = Field(default=None, description="Midpoint between east and south vertices")
+    south_west_midpoint: Optional[Point] = Field(default=None, description="Midpoint between south and west vertices")
+    west_north_midpoint: Optional[Point] = Field(default=None, description="Midpoint between west and north vertices")
 
 class DiamondInfo(BaseModel):
     """
@@ -270,6 +276,10 @@ class SpriteData(BaseModel):
         default=0,
         description="Frame-specific upper Z offset in pixels. Creates an upper diamond layer above the main diamond. Overrides global upper_z_offset when > 0."
     )
+    manual_diamond_width: Optional[int] = Field(
+        default=None,
+        description="Manual diamond width override in pixels. When set, overrides bbox.width for diamond calculations. Useful for smaller assets that should align to full tile dimensions."
+    )
     
     # Computed properties (optional until calculated)
     pixel_count: Optional[int] = Field(
@@ -287,6 +297,10 @@ class SpriteData(BaseModel):
     detailed_analysis: Optional[DetailedAnalysis] = Field(
         default=None,
         description="Complete geometric analysis including contact points, isometric lines, and convex hulls"
+    )
+    custom_keypoints: Dict[str, Point] = Field(
+        default_factory=dict,
+        description="User-defined custom keypoints with arbitrary names for prop attachment, interaction zones, etc."
     )
     
     def get_sprite_rect(self, spritesheet_model: 'SpritesheetModel') -> Tuple[int, int, int, int]:
@@ -373,6 +387,10 @@ class SpritesheetModel(BaseModel):
         default=False,
         description="UI toggle for displaying diamond vertices as white points"
     )
+    manual_diamond_width: Optional[int] = Field(
+        default=None,
+        description="Global manual diamond width override in pixels. When set, overrides bbox.width for diamond calculations across all sprites. Useful for maintaining consistent diamond proportions."
+    )
     
     # Computed analysis data
     sprites: List[SpriteData] = Field(
@@ -423,6 +441,21 @@ class SpritesheetModel(BaseModel):
             # Use frame-specific if set, otherwise use global
             return sprite.frame_upper_z_offset if sprite.frame_upper_z_offset > 0 else self.upper_z_offset
         return self.upper_z_offset
+    
+    def get_effective_diamond_width(self, sprite_index: int) -> int:
+        """Get the effective diamond width for a sprite (frame-specific, global, or bbox width)"""
+        if 0 <= sprite_index < len(self.sprites):
+            sprite = self.sprites[sprite_index]
+            # Priority: frame-specific > global > bbox width
+            if sprite.manual_diamond_width and sprite.manual_diamond_width > 0:
+                return sprite.manual_diamond_width
+            elif self.manual_diamond_width and self.manual_diamond_width > 0:
+                return self.manual_diamond_width
+            elif sprite.bbox:
+                return sprite.bbox.width
+            else:
+                return 64  # Fallback default
+        return 64  # Fallback default
     
     def set_frame_upper_z_offset(self, sprite_index: int, z_offset: int):
         """Set frame-specific upper Z offset for a sprite"""
@@ -475,17 +508,146 @@ class SpritesheetModel(BaseModel):
         }
     
     def save_to_json(self, path: str):
-        """Save the model to a JSON file with compact line representation"""
+        """Save the model to a JSON file with clean essential data only"""
         path_obj = Path(path)
         with open(path_obj, 'w') as f:
-            # Get the full model data
-            data = self._convert_numpy_types(self.model_dump())
-            
-            # Compress line data before saving (only if data is a dict)
-            if isinstance(data, dict):
-                self._compress_line_data_for_json(data)
-            
+            # Create clean export data with only essential fields
+            data = self._create_clean_export_data()
             json.dump(data, f, indent=2)
+    
+    def _create_clean_export_data(self) -> Dict[str, Any]:
+        """Create clean export data with only essential fields for procedural generation"""
+        # Start with core spritesheet properties
+        clean_data = {
+            'image_path': self.image_path,
+            'total_width': self.total_width,
+            'total_height': self.total_height,
+            'rows': self.rows,
+            'cols': self.cols,
+            'sprite_width': self.sprite_width,
+            'sprite_height': self.sprite_height,
+            'alpha_threshold': self.alpha_threshold,
+            'upper_z_offset': self.upper_z_offset,
+            'upper_lines_midpoint_mode': self.upper_lines_midpoint_mode,
+            'show_diamond_height': self.show_diamond_height,
+            'show_overlay': self.show_overlay,
+            'show_diamond_vertices': self.show_diamond_vertices,
+            'sprites': []
+        }
+        
+        # Add clean sprite data (essential fields only)
+        for sprite in self.sprites:
+            clean_sprite = {
+                'sprite_index': sprite.sprite_index,
+                'original_size': sprite.original_size,
+                'asset_type': sprite.asset_type,
+                'frame_upper_z_offset': sprite.frame_upper_z_offset,
+            }
+            
+            # Add essential computed data if available
+            if sprite.bbox:
+                clean_sprite['bbox'] = {
+                    'x': sprite.bbox.x,
+                    'y': sprite.bbox.y,
+                    'width': sprite.bbox.width,
+                    'height': sprite.bbox.height
+                }
+            
+            if sprite.diamond_info:
+                clean_sprite['diamond_info'] = self._export_diamond_info(sprite.diamond_info, sprite.sprite_index)
+            
+            # Always include custom keypoints (empty dict if none)
+            clean_sprite['custom_keypoints'] = {
+                name: {'x': point.x, 'y': point.y}
+                for name, point in sprite.custom_keypoints.items()
+            }
+            
+            clean_data['sprites'].append(clean_sprite)
+        
+        return clean_data
+    
+    def _export_diamond_info(self, diamond_info: DiamondInfo, sprite_index: int) -> Dict[str, Any]:
+        """Export clean diamond info with vertices and midpoints"""
+        exported: Dict[str, Any] = {
+            # Legacy measurements for compatibility
+            'diamond_height': diamond_info.diamond_height,
+            'predicted_flat_height': diamond_info.predicted_flat_height,
+            'effective_height': diamond_info.effective_height,
+            'line_y': diamond_info.line_y,
+            'diamond_width': diamond_info.diamond_width,
+            'lower_z_offset': diamond_info.lower_z_offset,
+            'upper_z_offset': diamond_info.upper_z_offset,
+        }
+        
+        if diamond_info.upper_z_line_y is not None:
+            exported['upper_z_line_y'] = diamond_info.upper_z_line_y
+        
+        # Export lower diamond with vertices and midpoints
+        exported['lower_diamond'] = self._export_single_diamond(diamond_info.lower_diamond, sprite_index, 'lower')
+        
+        # Export upper diamond if present
+        if diamond_info.upper_diamond:
+            exported['upper_diamond'] = self._export_single_diamond(diamond_info.upper_diamond, sprite_index, 'upper')
+        
+        return exported
+    
+    def _export_single_diamond(self, diamond: SingleDiamondData, sprite_index: int, diamond_level: str) -> Dict[str, Any]:
+        """Export a single diamond with all vertices and computed midpoints using correct coordinates"""
+        # Get the correct vertex coordinates (manual overrides if present, otherwise algorithmic)
+        vertices = self._get_export_vertex_coords(diamond, sprite_index, diamond_level)
+        
+        exported = {
+            'north_vertex': {'x': vertices['north'][0], 'y': vertices['north'][1]},
+            'south_vertex': {'x': vertices['south'][0], 'y': vertices['south'][1]},
+            'east_vertex': {'x': vertices['east'][0], 'y': vertices['east'][1]},
+            'west_vertex': {'x': vertices['west'][0], 'y': vertices['west'][1]},
+            'center': {'x': diamond.center.x, 'y': diamond.center.y},
+            'z_offset': diamond.z_offset
+        }
+        
+        # Compute midpoints using the correct vertex coordinates
+        exported['north_east_midpoint'] = {
+            'x': (vertices['north'][0] + vertices['east'][0]) // 2,
+            'y': (vertices['north'][1] + vertices['east'][1]) // 2
+        }
+        exported['east_south_midpoint'] = {
+            'x': (vertices['east'][0] + vertices['south'][0]) // 2,
+            'y': (vertices['east'][1] + vertices['south'][1]) // 2
+        }
+        exported['south_west_midpoint'] = {
+            'x': (vertices['south'][0] + vertices['west'][0]) // 2,
+            'y': (vertices['south'][1] + vertices['west'][1]) // 2
+        }
+        exported['west_north_midpoint'] = {
+            'x': (vertices['west'][0] + vertices['north'][0]) // 2,
+            'y': (vertices['west'][1] + vertices['north'][1]) // 2
+        }
+        
+        return exported
+    
+    def _get_export_vertex_coords(self, diamond: SingleDiamondData, sprite_index: int, diamond_level: str) -> Dict[str, Tuple[int, int]]:
+        """Get vertex coordinates for export, using manual overrides if present"""
+        # Access the renderer's manual vertices if available
+        manual_vertices = getattr(self, '_renderer_manual_vertices', {})
+        manual_overrides = manual_vertices.get(sprite_index, {}).get(diamond_level, {})
+        
+        # Map vertex names to coordinates
+        vertices = {}
+        vertex_data = [
+            ('north', diamond.north_vertex),
+            ('south', diamond.south_vertex),
+            ('east', diamond.east_vertex),
+            ('west', diamond.west_vertex)
+        ]
+        
+        for vertex_name, vertex_point in vertex_data:
+            # Use manual override if present, otherwise use algorithmic
+            if vertex_name in manual_overrides:
+                vertices[vertex_name] = manual_overrides[vertex_name]
+            else:
+                vertices[vertex_name] = (vertex_point.x, vertex_point.y)
+        
+        return vertices
     
     def _compress_line_data_for_json(self, data: Dict[str, Any]):
         """Compress line data to compact format for JSON serialization"""
@@ -584,15 +746,145 @@ class SpritesheetModel(BaseModel):
     
     @classmethod
     def load_from_json(cls, path: str) -> 'SpritesheetModel':
-        """Load the model from a JSON file and restore full line data"""
+        """Load the model from a JSON file (new clean format only)"""
         path_obj = Path(path)
         with open(path_obj, 'r') as f:
             data = json.load(f)
         
-        # Restore line data from compact format
-        cls._restore_line_data_from_json(data)
+        # Create model from the clean data
+        model = cls._load_from_clean_format(data)
+        return model
+    
+    @classmethod
+    def _load_from_clean_format(cls, data: Dict[str, Any]) -> 'SpritesheetModel':
+        """Load from the new clean JSON format"""
+        # Create model with core properties
+        model_data = {
+            'image_path': data['image_path'],
+            'total_width': data['total_width'],
+            'total_height': data['total_height'],
+            'rows': data['rows'],
+            'cols': data['cols'],
+            'sprite_width': data['sprite_width'],
+            'sprite_height': data['sprite_height'],
+            'alpha_threshold': data.get('alpha_threshold', 0),
+            'upper_z_offset': data.get('upper_z_offset', 0),
+            'upper_lines_midpoint_mode': data.get('upper_lines_midpoint_mode', False),
+            'show_diamond_height': data.get('show_diamond_height', True),
+            'show_overlay': data.get('show_overlay', True),
+            'show_diamond_vertices': data.get('show_diamond_vertices', False),
+            'sprites': []
+        }
         
-        return cls(**data)
+        # Process sprite data
+        for sprite_data in data.get('sprites', []):
+            sprite = SpriteData(
+                sprite_index=sprite_data['sprite_index'],
+                original_size=tuple(sprite_data['original_size']),
+                asset_type=sprite_data.get('asset_type', AssetType.TILE),
+                frame_upper_z_offset=sprite_data.get('frame_upper_z_offset', 0)
+            )
+            
+            # Restore bbox if present
+            if 'bbox' in sprite_data:
+                bbox_data = sprite_data['bbox']
+                sprite.bbox = BoundingBox(
+                    x=bbox_data['x'],
+                    y=bbox_data['y'],
+                    width=bbox_data['width'],
+                    height=bbox_data['height']
+                )
+            
+            # Restore diamond_info if present
+            if 'diamond_info' in sprite_data:
+                sprite.diamond_info = cls._import_diamond_info(sprite_data['diamond_info'])
+            
+            # Restore custom keypoints if present
+            if 'custom_keypoints' in sprite_data:
+                sprite.custom_keypoints = {
+                    name: Point(x=point_data['x'], y=point_data['y'])
+                    for name, point_data in sprite_data['custom_keypoints'].items()
+                }
+            
+            model_data['sprites'].append(sprite)
+        
+        model = cls(**model_data)
+        return model
+    
+    def transfer_vertices_to_manual(self, renderer):
+        """Transfer all diamond vertices from model to renderer as manual vertices"""
+        for sprite in self.sprites:
+            if sprite.diamond_info:
+                sprite_key = sprite.sprite_index
+                
+                # Initialize renderer manual vertices for this sprite if not exists
+                if sprite_key not in renderer.manual_vertices:
+                    renderer.manual_vertices[sprite_key] = {}
+                
+                # Transfer lower diamond vertices
+                if sprite.diamond_info.lower_diamond:
+                    lower = sprite.diamond_info.lower_diamond
+                    renderer.manual_vertices[sprite_key]['lower'] = {
+                        'north': (lower.north_vertex.x, lower.north_vertex.y),
+                        'south': (lower.south_vertex.x, lower.south_vertex.y),
+                        'east': (lower.east_vertex.x, lower.east_vertex.y),
+                        'west': (lower.west_vertex.x, lower.west_vertex.y)
+                    }
+                
+                # Transfer upper diamond vertices if present
+                if sprite.diamond_info.upper_diamond:
+                    upper = sprite.diamond_info.upper_diamond
+                    renderer.manual_vertices[sprite_key]['upper'] = {
+                        'north': (upper.north_vertex.x, upper.north_vertex.y),
+                        'south': (upper.south_vertex.x, upper.south_vertex.y),
+                        'east': (upper.east_vertex.x, upper.east_vertex.y),
+                        'west': (upper.west_vertex.x, upper.west_vertex.y)
+                    }
+    
+    @classmethod
+    def _import_diamond_info(cls, diamond_data: Dict[str, Any]) -> DiamondInfo:
+        """Import diamond info from clean JSON format"""
+        # Import lower diamond
+        lower_diamond = cls._import_single_diamond(diamond_data['lower_diamond'])
+        
+        # Import upper diamond if present
+        upper_diamond = None
+        if 'upper_diamond' in diamond_data:
+            upper_diamond = cls._import_single_diamond(diamond_data['upper_diamond'])
+        
+        return DiamondInfo(
+            diamond_height=diamond_data['diamond_height'],
+            predicted_flat_height=diamond_data['predicted_flat_height'],
+            effective_height=diamond_data['effective_height'],
+            line_y=diamond_data['line_y'],
+            upper_z_line_y=diamond_data.get('upper_z_line_y'),
+            lower_diamond=lower_diamond,
+            upper_diamond=upper_diamond,
+            diamond_width=diamond_data['diamond_width'],
+            lower_z_offset=diamond_data['lower_z_offset'],
+            upper_z_offset=diamond_data['upper_z_offset']
+        )
+    
+    @classmethod
+    def _import_single_diamond(cls, diamond_data: Dict[str, Any]) -> SingleDiamondData:
+        """Import a single diamond from clean JSON format"""
+        return SingleDiamondData(
+            north_vertex=Point(x=diamond_data['north_vertex']['x'], y=diamond_data['north_vertex']['y']),
+            south_vertex=Point(x=diamond_data['south_vertex']['x'], y=diamond_data['south_vertex']['y']),
+            east_vertex=Point(x=diamond_data['east_vertex']['x'], y=diamond_data['east_vertex']['y']),
+            west_vertex=Point(x=diamond_data['west_vertex']['x'], y=diamond_data['west_vertex']['y']),
+            center=Point(x=diamond_data['center']['x'], y=diamond_data['center']['y']),
+            z_offset=diamond_data['z_offset'],
+            # Import midpoints if present
+            north_east_midpoint=Point(x=diamond_data['north_east_midpoint']['x'], y=diamond_data['north_east_midpoint']['y']) if 'north_east_midpoint' in diamond_data else None,
+            east_south_midpoint=Point(x=diamond_data['east_south_midpoint']['x'], y=diamond_data['east_south_midpoint']['y']) if 'east_south_midpoint' in diamond_data else None,
+            south_west_midpoint=Point(x=diamond_data['south_west_midpoint']['x'], y=diamond_data['south_west_midpoint']['y']) if 'south_west_midpoint' in diamond_data else None,
+            west_north_midpoint=Point(x=diamond_data['west_north_midpoint']['x'], y=diamond_data['west_north_midpoint']['y']) if 'west_north_midpoint' in diamond_data else None
+        )
+    
+    def set_manual_vertices_for_export(self, manual_vertices: Dict[int, Dict[str, Dict[str, Tuple[int, int]]]]):
+        """Set manual vertices data from renderer for export"""
+        self._renderer_manual_vertices = manual_vertices
     
     @classmethod
     def _restore_line_data_from_json(cls, data: Dict[str, Any]):
