@@ -385,13 +385,22 @@ class InputHandlers:
         if hasattr(self.ui.analysis_controls_panel.components, 'vertex_info_label'):
             vertex_name = self.ui.renderer._get_vertex_name(self.ui.renderer.selected_vertex)
             diamond_name = self.ui.renderer.selected_diamond.title()
+            
+            # Update custom diamonds list
+            self._update_custom_diamonds_list()
+            
             info_text = f'Selected: {diamond_name} {vertex_name} ({self.ui.renderer.selected_vertex})\n'
             info_text += 'Keys: 1234=NSEW F1/F2=Lower/Upper\n'
+            info_text += 'F4=New Custom, F5/F6=Cycle Custom\n'
+            
+            if self.ui.renderer.custom_diamonds:
+                info_text += f'Custom: {", ".join(self.ui.renderer.custom_diamonds)}\n'
+            
             info_text += 'Left-click add, Right-click remove'
             self.ui.analysis_controls_panel.components['vertex_info_label'].set_text(info_text)
     
     def handle_auto_populate_vertices(self):
-        """Auto-populate missing vertices based on manual inputs and geometric relationships"""
+        """Auto-populate missing vertices for the currently selected diamond only"""
         if not self.ui.model or not self.ui.renderer.manual_vertex_mode:
             print("Auto-populate requires manual vertex mode to be enabled")
             return
@@ -402,122 +411,154 @@ class InputHandlers:
             print("No sprite data available for auto-populate")
             return
         
+        selected_diamond = self.ui.renderer.selected_diamond
         manual_data = self.ui.renderer.manual_vertices.get(sprite_key, {})
-        if not manual_data:
-            print("No manual vertices to work with")
+        diamond_data = manual_data.get(selected_diamond, {})
+        
+        if not diamond_data:
+            print(f"No manual vertices for {selected_diamond} diamond to work with")
             return
         
         bbox = current_sprite.bbox
         # Use effective diamond width instead of bbox width for proper calculation
         effective_diamond_width = self.ui.model.get_effective_diamond_width(sprite_key)
         
-        print(f"\n=== AUTO-POPULATE VERTICES ===")
-        print(f"Starting with: {manual_data}")
+        print(f"\n=== AUTO-POPULATE VERTICES FOR {selected_diamond.upper()} DIAMOND ===")
+        print(f"Starting with {selected_diamond} diamond: {diamond_data}")
         print(f"Using effective diamond width: {effective_diamond_width} (bbox width: {bbox.width})")
         
         # Initialize if needed
         if sprite_key not in self.ui.renderer.manual_vertices:
             self.ui.renderer.manual_vertices[sprite_key] = {}
+        if selected_diamond not in self.ui.renderer.manual_vertices[sprite_key]:
+            self.ui.renderer.manual_vertices[sprite_key][selected_diamond] = {}
         
-        # Step 1: Complete each diamond that has >= 2 points
-        for diamond_level in ['lower', 'upper']:
-            diamond_data = manual_data.get(diamond_level, {})
-            point_count = len(diamond_data)
+        # Complete the selected diamond using existing points
+        point_count = len(diamond_data)
+        if point_count >= 1:
+            print(f"Completing {selected_diamond} diamond ({point_count} points)")
+            completed_diamond = self._complete_diamond_from_points(diamond_data, effective_diamond_width)
             
-            if point_count >= 2:
-                print(f"Completing {diamond_level} diamond ({point_count} points)")
-                completed_diamond = self._complete_diamond_from_points(diamond_data, effective_diamond_width)
-                
-                # Update manual vertices with completed diamond
-                if diamond_level not in self.ui.renderer.manual_vertices[sprite_key]:
-                    self.ui.renderer.manual_vertices[sprite_key][diamond_level] = {}
-                self.ui.renderer.manual_vertices[sprite_key][diamond_level].update(completed_diamond)
-        
-        # Step 2: Handle cross-diamond derivation if needed
-        lower_data = self.ui.renderer.manual_vertices[sprite_key].get('lower', {})
-        upper_data = self.ui.renderer.manual_vertices[sprite_key].get('upper', {})
-        
-        lower_complete = len(lower_data) >= 4
-        upper_complete = len(upper_data) >= 4
-        
-        if lower_complete and not upper_complete and len(upper_data) >= 1:
-            # Derive z_lower from one upper point and complete upper diamond
-            z_lower = self._derive_z_lower_from_diamonds(lower_data, upper_data)
-            print(f"Derived z_lower: {z_lower}")
-            completed_upper = self._derive_diamond_from_other(lower_data, -z_lower)  # Upper is ABOVE lower (smaller Y)
-            
-            if 'upper' not in self.ui.renderer.manual_vertices[sprite_key]:
-                self.ui.renderer.manual_vertices[sprite_key]['upper'] = {}
-            self.ui.renderer.manual_vertices[sprite_key]['upper'].update(completed_upper)
-            
-        elif upper_complete and not lower_complete and len(lower_data) >= 1:
-            # Derive z_lower from one lower point and complete lower diamond
-            z_lower = self._derive_z_lower_from_diamonds(upper_data, lower_data)
-            print(f"Derived z_lower: {z_lower}")
-            completed_lower = self._derive_diamond_from_other(upper_data, z_lower)  # Lower is BELOW upper (larger Y)
-            
-            if 'lower' not in self.ui.renderer.manual_vertices[sprite_key]:
-                self.ui.renderer.manual_vertices[sprite_key]['lower'] = {}
-            self.ui.renderer.manual_vertices[sprite_key]['lower'].update(completed_lower)
-            
-        elif lower_complete and not upper_complete:
-            # Use algorithmic z_lower to create upper diamond
-            if current_sprite.diamond_info:
-                z_lower = current_sprite.diamond_info.lower_z_offset
-                print(f"Using algorithmic z_lower: {z_lower}")
-                completed_upper = self._derive_diamond_from_other(lower_data, -z_lower)  # Upper is ABOVE lower
-                
-                if 'upper' not in self.ui.renderer.manual_vertices[sprite_key]:
-                    self.ui.renderer.manual_vertices[sprite_key]['upper'] = {}
-                self.ui.renderer.manual_vertices[sprite_key]['upper'].update(completed_upper)
-                
-        elif upper_complete and not lower_complete:
-            # Use algorithmic z_lower to create lower diamond
-            if current_sprite.diamond_info:
-                z_lower = current_sprite.diamond_info.lower_z_offset
-                print(f"Using algorithmic z_lower: {z_lower}")
-                completed_lower = self._derive_diamond_from_other(upper_data, z_lower)  # Lower is BELOW upper
-                
-                if 'lower' not in self.ui.renderer.manual_vertices[sprite_key]:
-                    self.ui.renderer.manual_vertices[sprite_key]['lower'] = {}
-                self.ui.renderer.manual_vertices[sprite_key]['lower'].update(completed_lower)
-        
-        print(f"Final result: {self.ui.renderer.manual_vertices[sprite_key]}")
+            # Update manual vertices with completed diamond
+            self.ui.renderer.manual_vertices[sprite_key][selected_diamond].update(completed_diamond)
+            print(f"Completed {selected_diamond} diamond: {completed_diamond}")
+        else:
+            print(f"Need at least 1 vertex to auto-populate {selected_diamond} diamond")
         
         # Clear cache and update display
         self.ui.renderer._clear_sprite_display_cache()
         self.ui.update_sprite_info()
     
     def _complete_diamond_from_points(self, diamond_data, diamond_width):
-        """Complete a diamond using geometric relationships from existing points"""
+        """Complete a diamond using improved geometric relationships and center-based calculations"""
         completed = {}
         
         # Copy existing points
         for vertex, coords in diamond_data.items():
             completed[vertex] = coords
         
-        # Apply geometric relationships to fill missing points
-        # NOTE: In screen coords, Y increases downward, so "up" = smaller Y
-        if 'south' in diamond_data and 'north' not in completed:
-            # North is directly above South by diamond_width//2 (smaller Y)
-            sx, sy = diamond_data['south']
-            completed['north'] = (sx, sy - diamond_width // 2)
-            
-        if 'north' in diamond_data and 'south' not in completed:
-            # South is directly below North by diamond_width//2 (larger Y)
-            nx, ny = diamond_data['north']
-            completed['south'] = (nx, ny + diamond_width // 2)
-            
-        if 'west' in diamond_data and 'east' not in completed:
-            # East is directly right of West by diamond_width
-            wx, wy = diamond_data['west']
-            completed['east'] = (wx + diamond_width, wy)
-            
-        if 'east' in diamond_data and 'west' not in completed:
-            # West is directly left of East by diamond_width
-            ex, ey = diamond_data['east']
-            completed['west'] = (ex - diamond_width, ey)
+        print(f"  Completing diamond with width {diamond_width} from points: {list(diamond_data.keys())}")
         
+        # Method 1: Use center between North/South to derive East/West
+        if 'north' in diamond_data and 'south' in diamond_data and ('east' not in completed or 'west' not in completed):
+            nx, ny = diamond_data['north']
+            sx, sy = diamond_data['south']
+            
+            # Calculate center between North and South
+            center_x = (nx + sx) // 2
+            center_y = (ny + sy) // 2
+            
+            print(f"  N/S center: ({center_x}, {center_y})")
+            
+            # East/West are at the center Y, offset by diamond_width/2 horizontally
+            if 'east' not in completed:
+                completed['east'] = (center_x + diamond_width // 2, center_y)
+                print(f"  Derived East from N/S center: {completed['east']}")
+                
+            if 'west' not in completed:
+                completed['west'] = (center_x - diamond_width // 2, center_y)
+                print(f"  Derived West from N/S center: {completed['west']}")
+        
+        # Method 2: Use center between East/West to derive North/South
+        elif 'east' in diamond_data and 'west' in diamond_data and ('north' not in completed or 'south' not in completed):
+            ex, ey = diamond_data['east']
+            wx, wy = diamond_data['west']
+            
+            # Calculate center between East and West
+            center_x = (ex + wx) // 2
+            center_y = (ey + wy) // 2
+            
+            print(f"  E/W center: ({center_x}, {center_y})")
+            
+            # North/South are at the center X, offset by diamond_width/4 vertically
+            # (diamond height is typically width/2, so each half is width/4)
+            if 'north' not in completed:
+                completed['north'] = (center_x, center_y - diamond_width // 4)
+                print(f"  Derived North from E/W center: {completed['north']}")
+                
+            if 'south' not in completed:
+                completed['south'] = (center_x, center_y + diamond_width // 4)
+                print(f"  Derived South from E/W center: {completed['south']}")
+        
+        # Method 3: Single-point completion - derive all vertices from any single point + diamond width
+        elif len(diamond_data) == 1:
+            vertex_name, (vx, vy) = next(iter(diamond_data.items()))
+            print(f"  Single-point completion from {vertex_name}: ({vx}, {vy})")
+            
+            # Calculate diamond center based on which vertex we have
+            if vertex_name == 'north':
+                center_x, center_y = vx, vy + diamond_width // 4
+            elif vertex_name == 'south':
+                center_x, center_y = vx, vy - diamond_width // 4
+            elif vertex_name == 'east':
+                center_x, center_y = vx - diamond_width // 2, vy
+            elif vertex_name == 'west':
+                center_x, center_y = vx + diamond_width // 2, vy
+            else:
+                print(f"  Unknown vertex name: {vertex_name}")
+                return completed
+            
+            print(f"  Calculated diamond center: ({center_x}, {center_y})")
+            
+            # Generate all four vertices from center
+            completed['north'] = (center_x, center_y - diamond_width // 4)
+            completed['south'] = (center_x, center_y + diamond_width // 4)
+            completed['east'] = (center_x + diamond_width // 2, center_y)
+            completed['west'] = (center_x - diamond_width // 2, center_y)
+            
+            print(f"  Generated complete diamond from single point:")
+            for v_name, coords in completed.items():
+                print(f"    {v_name}: {coords}")
+        
+        # Method 4: Fallback to pairwise single-point derivation
+        else:
+            # Apply geometric relationships to fill missing points
+            # NOTE: In screen coords, Y increases downward, so "up" = smaller Y
+            if 'south' in diamond_data and 'north' not in completed:
+                # North is directly above South by diamond_width//2 (diamond height)
+                sx, sy = diamond_data['south']
+                completed['north'] = (sx, sy - diamond_width // 2)
+                print(f"  Derived North from South: {completed['north']}")
+                
+            if 'north' in diamond_data and 'south' not in completed:
+                # South is directly below North by diamond_width//2 (diamond height)
+                nx, ny = diamond_data['north']
+                completed['south'] = (nx, ny + diamond_width // 2)
+                print(f"  Derived South from North: {completed['south']}")
+                
+            if 'west' in diamond_data and 'east' not in completed:
+                # East is directly right of West by diamond_width
+                wx, wy = diamond_data['west']
+                completed['east'] = (wx + diamond_width, wy)
+                print(f"  Derived East from West: {completed['east']}")
+                
+            if 'east' in diamond_data and 'west' not in completed:
+                # West is directly left of East by diamond_width
+                ex, ey = diamond_data['east']
+                completed['west'] = (ex - diamond_width, ey)
+                print(f"  Derived West from East: {completed['west']}")
+        
+        print(f"  Completed diamond: {completed}")
         return completed
     
     def _derive_z_lower_from_diamonds(self, complete_diamond, partial_diamond):
@@ -1074,7 +1115,13 @@ class InputHandlers:
         closest_distance = float('inf')
         removal_threshold = 10  # pixels
         
-        for diamond_level in ['lower', 'upper']:
+        # Check all diamond levels including custom diamonds
+        all_diamond_levels = ['lower', 'upper']
+        current_sprite = self.ui.model.get_current_sprite()
+        if current_sprite and current_sprite.diamond_info and current_sprite.diamond_info.extra_diamonds:
+            all_diamond_levels.extend(current_sprite.diamond_info.extra_diamonds.keys())
+        
+        for diamond_level in all_diamond_levels:
             if diamond_level in self.ui.renderer.manual_vertices[sprite_key]:
                 vertices = self.ui.renderer.manual_vertices[sprite_key][diamond_level]
                 for vertex_name, (v_x, v_y) in vertices.items():
@@ -1107,6 +1154,11 @@ class InputHandlers:
         # F3 key toggles custom keypoints mode (works regardless of other modes)
         if key == pygame.K_F3:
             self.handle_toggle_custom_keypoints_mode()
+            return
+        
+        # F4 key creates new custom diamond
+        if key == pygame.K_F4:
+            self.handle_create_custom_diamond()
             return
         
         # F1/F2 keys should exit custom keypoints mode and enter manual vertex mode
@@ -1147,8 +1199,15 @@ class InputHandlers:
         # F1/F2 for diamond selection
         elif key == pygame.K_F1:
             self.ui.renderer.selected_diamond = 'lower'
+            self.ui.renderer.selected_custom_diamond_index = -1
         elif key == pygame.K_F2:
             self.ui.renderer.selected_diamond = 'upper'
+            self.ui.renderer.selected_custom_diamond_index = -1
+        # F5/F6 for cycling through custom diamonds
+        elif key == pygame.K_F5:
+            self.handle_cycle_custom_diamond(-1)  # Previous
+        elif key == pygame.K_F6:
+            self.handle_cycle_custom_diamond(1)   # Next
         else:
             return  # Key not handled
         
@@ -1312,6 +1371,20 @@ class InputHandlers:
             # Replace upper diamond vertices with manual ones
             if 'upper' in manual_sprite_data and sprite.diamond_info.upper_diamond:
                 self._apply_manual_vertices_to_diamond(sprite.diamond_info.upper_diamond, manual_sprite_data['upper'])
+            
+            # Replace custom diamond vertices with manual ones
+            for diamond_name, custom_diamond in sprite.diamond_info.extra_diamonds.items():
+                if diamond_name in manual_sprite_data:
+                    self._apply_manual_vertices_to_diamond(custom_diamond, manual_sprite_data[diamond_name])
+            
+            # Recalculate diamonds_z_offset based on actual manual vertex positions
+            if sprite.diamond_info.lower_diamond and sprite.diamond_info.upper_diamond:
+                lower_north_y = sprite.diamond_info.lower_diamond.north_vertex.y
+                upper_north_y = sprite.diamond_info.upper_diamond.north_vertex.y
+                sprite.diamond_info.diamonds_z_offset = lower_north_y - upper_north_y
+                print(f"Recalculated diamonds_z_offset for sprite {sprite_index}: {sprite.diamond_info.diamonds_z_offset} (lower: {lower_north_y}, upper: {upper_north_y})")
+            else:
+                sprite.diamond_info.diamonds_z_offset = None
         
         return original_data
     
@@ -1392,3 +1465,140 @@ class InputHandlers:
             return False
         
         return sprite_index in self.ui.renderer.manual_vertices and len(self.ui.renderer.manual_vertices[sprite_index]) > 0
+    
+    def handle_create_custom_diamond(self):
+        """Handle F4 key to create a new custom diamond"""
+        if not self.ui.model:
+            print("Please load a spritesheet first before creating custom diamonds")
+            return
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            print("No diamond analysis data available for creating custom diamonds")
+            return
+        
+        # Show dialog to get diamond name
+        diamond_name = self._show_diamond_name_dialog()
+        if not diamond_name or not diamond_name.strip():
+            print("Custom diamond creation cancelled")
+            return
+        
+        clean_name = diamond_name.strip()
+        
+        # Check if name already exists
+        if clean_name in current_sprite.diamond_info.extra_diamonds:
+            print(f"Custom diamond '{clean_name}' already exists")
+            return
+        
+        # Create a new empty diamond with default z_offset
+        from spritesheet_model import SingleDiamondData, Point
+        
+        # Start with a template based on lower diamond but with custom z_offset
+        template = current_sprite.diamond_info.lower_diamond
+        custom_z_offset = 50.0  # Default offset
+        
+        new_diamond = SingleDiamondData(
+            north_vertex=Point(x=template.north_vertex.x, y=template.north_vertex.y - int(custom_z_offset)),
+            south_vertex=Point(x=template.south_vertex.x, y=template.south_vertex.y - int(custom_z_offset)),
+            east_vertex=Point(x=template.east_vertex.x, y=template.east_vertex.y - int(custom_z_offset)),
+            west_vertex=Point(x=template.west_vertex.x, y=template.west_vertex.y - int(custom_z_offset)),
+            center=Point(x=template.center.x, y=template.center.y - int(custom_z_offset)),
+            z_offset=custom_z_offset
+        )
+        
+        # Add to model
+        current_sprite.diamond_info.extra_diamonds[clean_name] = new_diamond
+        
+        # Update renderer's custom diamonds list
+        self._update_custom_diamonds_list()
+        
+        # Select the new custom diamond
+        self.ui.renderer.selected_diamond = clean_name
+        self.ui.renderer.selected_custom_diamond_index = len(self.ui.renderer.custom_diamonds) - 1
+        
+        print(f"Created custom diamond '{clean_name}' with z_offset {custom_z_offset}")
+        print(f"Selected custom diamond: {clean_name}")
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self._update_vertex_info_label()
+    
+    def handle_cycle_custom_diamond(self, direction):
+        """Handle F5/F6 keys to cycle through custom diamonds"""
+        if not self.ui.model:
+            return
+        
+        # Update custom diamonds list
+        self._update_custom_diamonds_list()
+        
+        if not self.ui.renderer.custom_diamonds:
+            print("No custom diamonds available")
+            return
+        
+        # Cycle through custom diamonds
+        if self.ui.renderer.selected_custom_diamond_index == -1:
+            # Not currently on a custom diamond, select first
+            self.ui.renderer.selected_custom_diamond_index = 0 if direction > 0 else len(self.ui.renderer.custom_diamonds) - 1
+        else:
+            # Cycle to next/previous
+            self.ui.renderer.selected_custom_diamond_index += direction
+            
+            # Wrap around
+            if self.ui.renderer.selected_custom_diamond_index >= len(self.ui.renderer.custom_diamonds):
+                self.ui.renderer.selected_custom_diamond_index = 0
+            elif self.ui.renderer.selected_custom_diamond_index < 0:
+                self.ui.renderer.selected_custom_diamond_index = len(self.ui.renderer.custom_diamonds) - 1
+        
+        # Update selected diamond
+        if 0 <= self.ui.renderer.selected_custom_diamond_index < len(self.ui.renderer.custom_diamonds):
+            self.ui.renderer.selected_diamond = self.ui.renderer.custom_diamonds[self.ui.renderer.selected_custom_diamond_index]
+            print(f"Selected custom diamond: {self.ui.renderer.selected_diamond}")
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self._update_vertex_info_label()
+    
+    def _update_custom_diamonds_list(self):
+        """Update the renderer's custom diamonds list based on current sprite"""
+        if not self.ui.model:
+            self.ui.renderer.custom_diamonds = []
+            return
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            self.ui.renderer.custom_diamonds = []
+            return
+        
+        # Update list of custom diamond names
+        self.ui.renderer.custom_diamonds = list(current_sprite.diamond_info.extra_diamonds.keys())
+        
+        # Validate selected index
+        if (self.ui.renderer.selected_custom_diamond_index >= len(self.ui.renderer.custom_diamonds) or
+            self.ui.renderer.selected_custom_diamond_index < 0):
+            self.ui.renderer.selected_custom_diamond_index = -1
+            # Reset to lower diamond if custom selection is invalid
+            if self.ui.renderer.selected_diamond not in ['lower', 'upper'] and self.ui.renderer.selected_diamond not in self.ui.renderer.custom_diamonds:
+                self.ui.renderer.selected_diamond = 'lower'
+    
+    def _show_diamond_name_dialog(self):
+        """Show a dialog to get the name for a new custom diamond"""
+        try:
+            import tkinter as tk
+            from tkinter import simpledialog
+            
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            
+            # Show input dialog
+            diamond_name = simpledialog.askstring(
+                "Custom Diamond",
+                "Enter name for the new custom diamond:",
+                initialvalue="custom_diamond"
+            )
+            
+            root.destroy()
+            return diamond_name
+            
+        except Exception as e:
+            print(f"Error showing diamond name dialog: {e}")
+            return None

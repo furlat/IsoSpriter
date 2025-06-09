@@ -179,13 +179,14 @@ class SpriteAnalyzer:
         lower_center_y = bbox.y + bbox.height // 2
         
         # Create lower diamond data using the extracted/computed vertices (midpoints computed at save time)
+        # Lower diamond always has z_offset=0 as it's the reference point
         lower_diamond = SingleDiamondData(
             north_vertex=Point(x=north_x, y=north_y),
             south_vertex=Point(x=south_x, y=south_y),
             east_vertex=Point(x=east_x, y=east_y),
             west_vertex=Point(x=west_x, y=west_y),
             center=Point(x=lower_center_x, y=lower_center_y),
-            z_offset=lower_z_offset
+            z_offset=0.0
         )
         
         # Create upper diamond if there's a significant lower_z_offset (predicted_flat_height)
@@ -213,8 +214,13 @@ class SpriteAnalyzer:
                 east_vertex=Point(x=upper_east_x, y=upper_east_y),
                 west_vertex=Point(x=upper_west_x, y=upper_west_y),
                 center=Point(x=upper_center_x, y=upper_center_y),
-                z_offset=effective_upper_z if effective_upper_z > 0 else lower_z_offset
+                z_offset=float(diamond_height)  # Z-offset from lower diamond (negative Y direction)
             )
+        
+        # Calculate diamonds_z_offset: Y difference between lower and upper diamond north vertices
+        diamonds_z_offset = None
+        if upper_diamond:
+            diamonds_z_offset = lower_diamond.north_vertex.y - upper_diamond.north_vertex.y
         
         return DiamondInfo(
             # Legacy fields
@@ -226,9 +232,11 @@ class SpriteAnalyzer:
             # New explicit diamond data using raycast results
             lower_diamond=lower_diamond,
             upper_diamond=upper_diamond,
+            extra_diamonds={},  # Initialize empty, will be populated by manual creation
             diamond_width=diamond_width,
             lower_z_offset=lower_z_offset,
-            upper_z_offset=effective_upper_z
+            upper_z_offset=effective_upper_z,
+            diamonds_z_offset=diamonds_z_offset
         )
     
     def _analyze_detailed_measurements(self, sprite: pygame.Surface, bbox: BoundingBox, sprite_index: int) -> DetailedAnalysis:

@@ -28,7 +28,9 @@ class SpriteRenderer:
         # Manual vertex editing state (these will be set by the main UI)
         self.manual_vertex_mode = False
         self.selected_vertex = 1  # 1=N, 2=S, 3=E, 4=W
-        self.selected_diamond = 'lower'  # 'lower' or 'upper'
+        self.selected_diamond = 'lower'  # 'lower', 'upper', or custom diamond name
+        self.custom_diamonds = []  # List of custom diamond names for current sprite
+        self.selected_custom_diamond_index = -1  # Index in custom_diamonds list (-1 means not using custom)
         self.manual_vertices = {}  # Dictionary to store manual vertex overrides per sprite
         
         # Custom keypoints mode (F3 mode)
@@ -77,11 +79,20 @@ class SpriteRenderer:
             elif model.manual_diamond_width is not None:
                 manual_diamond_width_key = ('global', model.manual_diamond_width)
         
+        # Include custom diamonds in cache key since they affect rendering
+        custom_diamonds_key = None
+        if model:
+            current_sprite = model.get_current_sprite()
+            if current_sprite and current_sprite.diamond_info and current_sprite.diamond_info.extra_diamonds:
+                # Create a hashable representation of custom diamonds
+                custom_diamonds_key = tuple(sorted(current_sprite.diamond_info.extra_diamonds.keys()))
+        
         return (sprite_index, pixeloid_mult, alpha_threshold, show_overlay,
                 show_diamond, upper_lines_mode, show_diamond_vertices, effective_upper_z,
                 pan_x, pan_y, self.manual_vertex_mode, manual_vertices_key,
                 self.show_diamond_lines, self.show_raycast_analysis,
-                self.custom_keypoints_mode, custom_keypoints_key, manual_diamond_width_key)
+                self.custom_keypoints_mode, custom_keypoints_key, manual_diamond_width_key,
+                custom_diamonds_key, self.selected_diamond)
     
     def _limit_cache_size(self):
         """Remove oldest cache entries if cache size exceeds limit"""
@@ -114,7 +125,12 @@ class SpriteRenderer:
         sprite_key = model.current_sprite_index
         manual_overrides = self.manual_vertices.get(sprite_key, {})
         
-        for diamond_level in ['lower', 'upper']:
+        # Check all diamond levels including custom diamonds
+        all_diamond_levels = ['lower', 'upper']
+        if current_sprite.diamond_info and current_sprite.diamond_info.extra_diamonds:
+            all_diamond_levels.extend(current_sprite.diamond_info.extra_diamonds.keys())
+        
+        for diamond_level in all_diamond_levels:
             level_vertices = manual_overrides.get(diamond_level, {})
             for vertex_name, (abs_x, abs_y) in level_vertices.items():
                 # Expand bounds to include manual vertex positions
@@ -595,6 +611,15 @@ class SpriteRenderer:
                 'upper', diamond_info.upper_diamond, manual_overrides.get('upper', {}),
                 True, model  # True = diamond vertices for upper
             )
+        
+        # Draw custom diamonds if present
+        if diamond_info.extra_diamonds:
+            for diamond_name, diamond_data in diamond_info.extra_diamonds.items():
+                self._draw_diamond_level_vertices(
+                    surface, sprite_x, sprite_y, scaled_bbox, bbox, pixeloid_mult,
+                    diamond_name, diamond_data, manual_overrides.get(diamond_name, {}),
+                    True, model  # True = diamond vertices for custom diamonds
+                )
     
     def _draw_diamond_level_vertices(self, surface, sprite_x, sprite_y, scaled_bbox, bbox, pixeloid_mult,
                                    diamond_level, diamond_data, manual_overrides, is_upper, model: SpritesheetModel):
@@ -761,6 +786,19 @@ class SpriteRenderer:
                 diamond_info.upper_diamond, manual_overrides.get('upper', {}),
                 (255, 200, 0), line_width  # Lighter yellow color
             )
+        
+        # Draw custom diamond outlines if present
+        if diamond_info.extra_diamonds:
+            color_index = 0
+            custom_colors = [(0, 255, 255), (255, 0, 255), (0, 255, 0), (255, 128, 0)]  # Cyan, Magenta, Green, Orange
+            for diamond_name, diamond_data in diamond_info.extra_diamonds.items():
+                color = custom_colors[color_index % len(custom_colors)]
+                self._draw_diamond_outline(
+                    surface, sprite_x, sprite_y, scaled_bbox, bbox, pixeloid_mult,
+                    diamond_data, manual_overrides.get(diamond_name, {}),
+                    color, line_width
+                )
+                color_index += 1
     
     def _draw_diamond_outline(self, surface, sprite_x, sprite_y, scaled_bbox, bbox, pixeloid_mult,
                              diamond_data, manual_overrides, color, line_width):

@@ -95,13 +95,15 @@ class DiamondInfo(BaseModel):
     upper_z_line_y: Optional[float] = Field(None, description="Y-coordinate of the upper diamond separation line when upper_z_offset is used")
     
     # New explicit diamond data for procedural generation
-    lower_diamond: SingleDiamondData = Field(..., description="Lower diamond structure with vertices, center, and z-offset")
+    lower_diamond: SingleDiamondData = Field(..., description="Lower diamond structure with vertices, center, and z-offset (always 0)")
     upper_diamond: Optional[SingleDiamondData] = Field(None, description="Upper diamond structure (when upper_z_offset > 0)")
+    extra_diamonds: Dict[str, SingleDiamondData] = Field(default_factory=dict, description="Custom named diamonds with their own z-offsets")
     
     # Derived measurements
     diamond_width: float = Field(..., description="Width of the diamond (distance between east and west vertices)")
-    lower_z_offset: float = Field(..., description="Z-offset of the lower diamond base from sprite bottom")
-    upper_z_offset: float = Field(default=0, description="Z-offset of the upper diamond from sprite top")
+    lower_z_offset: float = Field(..., description="Z-offset of the lower diamond base from sprite bottom (legacy compatibility)")
+    upper_z_offset: float = Field(default=0, description="Z-offset of the upper diamond from sprite top (legacy compatibility)")
+    diamonds_z_offset: Optional[float] = Field(default=None, description="Actual measured Y-axis difference between north vertices of lower and upper diamonds (isometric height)")
 
 class EdgeContactPoints(BaseModel):
     """
@@ -582,12 +584,21 @@ class SpritesheetModel(BaseModel):
         if diamond_info.upper_z_line_y is not None:
             exported['upper_z_line_y'] = diamond_info.upper_z_line_y
         
+        if diamond_info.diamonds_z_offset is not None:
+            exported['diamonds_z_offset'] = diamond_info.diamonds_z_offset
+        
         # Export lower diamond with vertices and midpoints
         exported['lower_diamond'] = self._export_single_diamond(diamond_info.lower_diamond, sprite_index, 'lower')
         
         # Export upper diamond if present
         if diamond_info.upper_diamond:
             exported['upper_diamond'] = self._export_single_diamond(diamond_info.upper_diamond, sprite_index, 'upper')
+        
+        # Export extra diamonds if present
+        if diamond_info.extra_diamonds:
+            exported['extra_diamonds'] = {}
+            for diamond_name, diamond_data in diamond_info.extra_diamonds.items():
+                exported['extra_diamonds'][diamond_name] = self._export_single_diamond(diamond_data, sprite_index, diamond_name)
         
         return exported
     
@@ -840,6 +851,15 @@ class SpritesheetModel(BaseModel):
                         'east': (upper.east_vertex.x, upper.east_vertex.y),
                         'west': (upper.west_vertex.x, upper.west_vertex.y)
                     }
+                
+                # Transfer custom diamond vertices if present
+                for diamond_name, custom_diamond in sprite.diamond_info.extra_diamonds.items():
+                    renderer.manual_vertices[sprite_key][diamond_name] = {
+                        'north': (custom_diamond.north_vertex.x, custom_diamond.north_vertex.y),
+                        'south': (custom_diamond.south_vertex.x, custom_diamond.south_vertex.y),
+                        'east': (custom_diamond.east_vertex.x, custom_diamond.east_vertex.y),
+                        'west': (custom_diamond.west_vertex.x, custom_diamond.west_vertex.y)
+                    }
     
     @classmethod
     def _import_diamond_info(cls, diamond_data: Dict[str, Any]) -> DiamondInfo:
@@ -852,6 +872,12 @@ class SpritesheetModel(BaseModel):
         if 'upper_diamond' in diamond_data:
             upper_diamond = cls._import_single_diamond(diamond_data['upper_diamond'])
         
+        # Import extra diamonds if present
+        extra_diamonds = {}
+        if 'extra_diamonds' in diamond_data:
+            for diamond_name, extra_diamond_data in diamond_data['extra_diamonds'].items():
+                extra_diamonds[diamond_name] = cls._import_single_diamond(extra_diamond_data)
+        
         return DiamondInfo(
             diamond_height=diamond_data['diamond_height'],
             predicted_flat_height=diamond_data['predicted_flat_height'],
@@ -860,9 +886,11 @@ class SpritesheetModel(BaseModel):
             upper_z_line_y=diamond_data.get('upper_z_line_y'),
             lower_diamond=lower_diamond,
             upper_diamond=upper_diamond,
+            extra_diamonds=extra_diamonds,
             diamond_width=diamond_data['diamond_width'],
             lower_z_offset=diamond_data['lower_z_offset'],
-            upper_z_offset=diamond_data['upper_z_offset']
+            upper_z_offset=diamond_data['upper_z_offset'],
+            diamonds_z_offset=diamond_data.get('diamonds_z_offset')
         )
     
     @classmethod
