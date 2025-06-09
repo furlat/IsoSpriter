@@ -650,13 +650,17 @@ class SpriteRenderer:
             # Choose color
             vertex_color = (0, 255, 255) if is_manual else (255, 255, 255)  # Cyan for manual, white for algorithmic
             
-            # Draw the vertex shape
-            if is_upper:
+            # Draw the vertex shape and determine label
+            if diamond_level == 'lower':
+                self._draw_square_shape(surface, screen_x, screen_y, vertex_size, vertex_color)
+                label = vertex_name
+            elif diamond_level == 'upper':
                 self._draw_diamond_shape(surface, screen_x, screen_y, vertex_size, vertex_color)
                 label = f"U{vertex_name}"
             else:
-                self._draw_square_shape(surface, screen_x, screen_y, vertex_size, vertex_color)
-                label = vertex_name
+                # Custom diamond - use diamond shape and custom name prefix
+                self._draw_diamond_shape(surface, screen_x, screen_y, vertex_size, vertex_color)
+                label = f"{diamond_level.upper()}{vertex_name}"
             
             # Highlight selected vertex
             if (self.manual_vertex_mode and self.selected_diamond == diamond_level and

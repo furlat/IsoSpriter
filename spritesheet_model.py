@@ -587,25 +587,33 @@ class SpritesheetModel(BaseModel):
         if diamond_info.diamonds_z_offset is not None:
             exported['diamonds_z_offset'] = diamond_info.diamonds_z_offset
         
-        # Export lower diamond with vertices and midpoints
-        exported['lower_diamond'] = self._export_single_diamond(diamond_info.lower_diamond, sprite_index, 'lower')
+        # Get the lower diamond's north vertex Y coordinate for z_offset calculation
+        lower_vertices = self._get_export_vertex_coords(diamond_info.lower_diamond, sprite_index, 'lower')
+        lower_north_y = lower_vertices['north'][1]
+        
+        # Export lower diamond with vertices and midpoints (z_offset = 0)
+        exported['lower_diamond'] = self._export_single_diamond(diamond_info.lower_diamond, sprite_index, 'lower', lower_north_y)
         
         # Export upper diamond if present
         if diamond_info.upper_diamond:
-            exported['upper_diamond'] = self._export_single_diamond(diamond_info.upper_diamond, sprite_index, 'upper')
+            exported['upper_diamond'] = self._export_single_diamond(diamond_info.upper_diamond, sprite_index, 'upper', lower_north_y)
         
         # Export extra diamonds if present
         if diamond_info.extra_diamonds:
             exported['extra_diamonds'] = {}
             for diamond_name, diamond_data in diamond_info.extra_diamonds.items():
-                exported['extra_diamonds'][diamond_name] = self._export_single_diamond(diamond_data, sprite_index, diamond_name)
+                exported['extra_diamonds'][diamond_name] = self._export_single_diamond(diamond_data, sprite_index, diamond_name, lower_north_y)
         
         return exported
     
-    def _export_single_diamond(self, diamond: SingleDiamondData, sprite_index: int, diamond_level: str) -> Dict[str, Any]:
-        """Export a single diamond with all vertices and computed midpoints using correct coordinates"""
+    def _export_single_diamond(self, diamond: SingleDiamondData, sprite_index: int, diamond_level: str, lower_north_y: int) -> Dict[str, Any]:
+        """Export a single diamond with all vertices and computed midpoints using correct coordinates and calculated z_offset"""
         # Get the correct vertex coordinates (manual overrides if present, otherwise algorithmic)
         vertices = self._get_export_vertex_coords(diamond, sprite_index, diamond_level)
+        
+        # Calculate z_offset based on the difference between lower diamond's north vertex Y and this diamond's north vertex Y
+        # Lower diamond always has z_offset = 0, other diamonds have z_offset = lower_north_y - this_north_y
+        calculated_z_offset = 0.0 if diamond_level == 'lower' else float(lower_north_y - vertices['north'][1])
         
         exported = {
             'north_vertex': {'x': vertices['north'][0], 'y': vertices['north'][1]},
@@ -613,7 +621,7 @@ class SpritesheetModel(BaseModel):
             'east_vertex': {'x': vertices['east'][0], 'y': vertices['east'][1]},
             'west_vertex': {'x': vertices['west'][0], 'y': vertices['west'][1]},
             'center': {'x': diamond.center.x, 'y': diamond.center.y},
-            'z_offset': diamond.z_offset
+            'z_offset': calculated_z_offset
         }
         
         # Compute midpoints using the correct vertex coordinates
