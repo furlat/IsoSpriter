@@ -57,10 +57,6 @@ class InputHandlers:
             self.handle_delete_all_custom_keypoints()
         elif event.ui_element == ui_elements['analysis_reset_vertices_button']:
             self.handle_reset_manual_vertices()
-        elif event.ui_element == ui_elements['view_pixeloid_up_button']:
-            self.handle_pixeloid_up()
-        elif event.ui_element == ui_elements['view_pixeloid_down_button']:
-            self.handle_pixeloid_down()
         elif event.ui_element == ui_elements['view_pixeloid_reset_button']:
             self.handle_reset_view()
         elif event.ui_element == ui_elements['view_center_view_button']:
@@ -647,29 +643,12 @@ class InputHandlers:
         self.ui.renderer._clear_sprite_display_cache()
         self.ui.update_sprite_info()
     
-    def handle_pixeloid_up(self):
-        """Handle pixeloid increase"""
-        if self.ui.model:
-            self.ui.model.pixeloid_multiplier = min(32, self.ui.model.pixeloid_multiplier * 2)
-            self.ui.view_controls_panel.components['pixeloid_label'].set_text(f'Pixeloid: {self.ui.model.pixeloid_multiplier}x')
-            # Clear cache since pixeloid affects rendering
-            self.ui.renderer._clear_sprite_display_cache()
-    
-    def handle_pixeloid_down(self):
-        """Handle pixeloid decrease"""
-        if self.ui.model:
-            self.ui.model.pixeloid_multiplier = max(1, self.ui.model.pixeloid_multiplier // 2)
-            self.ui.view_controls_panel.components['pixeloid_label'].set_text(f'Pixeloid: {self.ui.model.pixeloid_multiplier}x')
-            # Clear cache since pixeloid affects rendering
-            self.ui.renderer._clear_sprite_display_cache()
-    
     def handle_reset_view(self):
         """Handle view reset"""
         if self.ui.model:
             self.ui.model.pixeloid_multiplier = 1
             self.ui.model.pan_x = 0
             self.ui.model.pan_y = 0
-            self.ui.view_controls_panel.components['pixeloid_label'].set_text(f'Pixeloid: {self.ui.model.pixeloid_multiplier}x')
             # Clear cache since pixeloid and pan affects rendering
             self.ui.renderer._clear_sprite_display_cache()
     
@@ -780,7 +759,6 @@ class InputHandlers:
                 # to allow the image to move freely to center the targeted pixel
                 
                 # Update UI and clear cache
-                self.ui.view_controls_panel.components['pixeloid_label'].set_text(f'Pixeloid: {self.ui.model.pixeloid_multiplier}x')
                 self.ui.renderer._clear_sprite_display_cache()
     
     def handle_mouse_motion(self, event):

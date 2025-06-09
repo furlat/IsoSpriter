@@ -11,7 +11,7 @@ from sprite_analysis import SpriteAnalyzer
 from sprite_renderer import SpriteRenderer
 from ui_components import (
     FileOperationsPanel, AnalysisControlsPanel, NavigationPanel,
-    BoundingBoxInfoPanel, ViewControlsPanel, DetailedMeasurementsPanel
+    BoundingBoxInfoPanel, ViewControlsPanel
 )
 from input_handlers import InputHandlers
 
@@ -88,9 +88,6 @@ class AdvancedSpritesheetUI:
         current_y = 0
         
         self.view_controls_panel = ViewControlsPanel(self.manager, right_start_x, current_y, RIGHT_PANEL_WIDTH)
-        current_y += self.view_controls_panel.height + 10
-        
-        self.detailed_measurements_panel = DetailedMeasurementsPanel(self.manager, right_start_x, current_y, RIGHT_PANEL_WIDTH)
     
     def get_all_ui_elements(self):
         """Get all UI elements for event handling"""
@@ -102,8 +99,7 @@ class AdvancedSpritesheetUI:
             ('analysis', self.analysis_controls_panel),
             ('navigation', self.navigation_panel),
             ('bbox', self.bbox_info_panel),
-            ('view', self.view_controls_panel),
-            ('measurements', self.detailed_measurements_panel)
+            ('view', self.view_controls_panel)
         ]:
             for element_name, element in panel.components.items():
                 elements[f'{panel_name}_{element_name}'] = element
@@ -235,9 +231,6 @@ class AdvancedSpritesheetUI:
                 f'Original: {original_size[0]}x{original_size[1]}\nCropped: N/A\nSavings: N/A'
             )
         
-        # Update detailed measurements
-        self.detailed_measurements_panel.update_data_from_model(current_sprite, self)
-        
         # Update frame-specific Z offset
         frame_z_offset = current_sprite.frame_upper_z_offset
         self.analysis_controls_panel.components['frame_z_input'].set_text(str(frame_z_offset))
@@ -248,7 +241,6 @@ class AdvancedSpritesheetUI:
         self.navigation_panel.components['pixel_count_label'].set_text('Pixels above threshold: 0')
         self.bbox_info_panel.components['bbox_label'].set_text('Bounding Box:\nN/A')
         self.bbox_info_panel.components['size_info_label'].set_text('Original: N/A\nCropped: N/A\nSavings: N/A')
-        self.detailed_measurements_panel.set_no_data()
     
     def run(self):
         """Main game loop - clean and simple"""
