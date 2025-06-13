@@ -36,6 +36,12 @@ class SpriteRenderer:
         # Custom keypoints mode (F3 mode)
         self.custom_keypoints_mode = False
         self.custom_keypoints = {}  # Dictionary to store custom keypoints per sprite: {sprite_index: {'keypoint_name': (x, y)}}
+        
+        # Sub-diamond editing mode
+        self.sub_diamond_mode = False
+        self.selected_sub_diamond_layer = 'lower'  # 'lower', 'upper', or custom diamond name
+        self.sub_diamond_editing_mode = 'walkability'  # 'walkability' or 'line_of_sight'
+        self.show_sub_diamonds = False  # Whether to visualize sub-diamonds
     
     def _clear_sprite_display_cache(self):
         """Clear the entire sprite display cache"""
@@ -92,7 +98,9 @@ class SpriteRenderer:
                 pan_x, pan_y, self.manual_vertex_mode, manual_vertices_key,
                 self.show_diamond_lines, self.show_raycast_analysis,
                 self.custom_keypoints_mode, custom_keypoints_key, manual_diamond_width_key,
-                custom_diamonds_key, self.selected_diamond)
+                custom_diamonds_key, self.selected_diamond, self.sub_diamond_mode,
+                self.show_sub_diamonds, self.selected_sub_diamond_layer,
+                self.sub_diamond_editing_mode)
     
     def _limit_cache_size(self):
         """Remove oldest cache entries if cache size exceeds limit"""
@@ -464,8 +472,13 @@ class SpriteRenderer:
                     pixeloid_mult = model.pixeloid_multiplier
                     self._draw_diamond_lines_to_surface(surface, sprite_x, sprite_y, scaled_bbox, current_sprite, pixeloid_mult, model)
                 
+                # Draw analysis points only if raycast analysis is enabled
                 if current_sprite.detailed_analysis and self.show_raycast_analysis:
                     self._draw_analysis_points_to_surface(surface, sprite_x, sprite_y, scaled_bbox, current_sprite, model)
+                
+                # Draw sub-diamonds INDEPENDENTLY of raycast analysis
+                if self.show_sub_diamonds and current_sprite.diamond_info:
+                    self._draw_sub_diamonds(surface, sprite_x, sprite_y, scaled_bbox, current_sprite, model.pixeloid_multiplier, model)
 
     def _draw_analysis_points_to_surface(self, surface: pygame.Surface, sprite_x, sprite_y, scaled_bbox, current_sprite, model: Optional[SpritesheetModel]):
         """Draw analysis points to the cached surface"""
@@ -1126,3 +1139,200 @@ class SpriteRenderer:
         
         # Draw the text
         surface.blit(text_surface, (label_x, label_y))
+    
+    def _draw_sub_diamonds(self, surface: pygame.Surface, sprite_x, sprite_y, scaled_bbox, current_sprite, pixeloid_mult, model: SpritesheetModel):
+        """Draw sub-diamonds for the selected diamond layer with walkability and line of sight visualization"""
+        if not current_sprite.diamond_info or not model:
+            return
+        
+        diamond_info = current_sprite.diamond_info
+        bbox = current_sprite.bbox
+        if not bbox:
+            return
+        
+        # Get the selected diamond data
+        diamond_data = None
+        if self.selected_sub_diamond_layer == 'lower' and diamond_info.lower_diamond:
+            diamond_data = diamond_info.lower_diamond
+        elif self.selected_sub_diamond_layer == 'upper' and diamond_info.upper_diamond:
+            diamond_data = diamond_info.upper_diamond
+        elif self.selected_sub_diamond_layer in diamond_info.extra_diamonds:
+            diamond_data = diamond_info.extra_diamonds[self.selected_sub_diamond_layer]
+        
+        if not diamond_data:
+            return
+        
+        # Ensure sub-diamonds are properly initialized
+        diamond_data.ensure_sub_diamonds_initialized()
+        
+        if not diamond_data.sub_diamonds:
+            return
+        
+        # Get manual vertex overrides for positioning
+        sprite_key = model.current_sprite_index
+        manual_overrides = self.manual_vertices.get(sprite_key, {}).get(self.selected_sub_diamond_layer, {})
+        
+        # Draw each sub-diamond
+        for direction, sub_diamond in diamond_data.sub_diamonds.items():
+            self._draw_single_sub_diamond(
+                surface, sprite_x, sprite_y, scaled_bbox, bbox, pixeloid_mult,
+                sub_diamond, direction, manual_overrides
+            )
+    
+    def _draw_single_sub_diamond(self, surface, sprite_x, sprite_y, scaled_bbox, bbox, pixeloid_mult,
+                                sub_diamond, direction, manual_overrides):
+        """Draw a single sub-diamond with walkability surface and edge properties visualization"""
+        
+        # Convert absolute coordinates to bbox-relative coordinates (same as diamond lines)
+        vertices = {}
+        for vertex_name, vertex_point in [
+            ('N', sub_diamond.north_vertex),
+            ('S', sub_diamond.south_vertex),
+            ('E', sub_diamond.east_vertex),
+            ('W', sub_diamond.west_vertex)
+        ]:
+            # Convert to bbox-relative coordinates (same logic as diamond lines)
+            rel_x = vertex_point.x - bbox.x
+            rel_y = vertex_point.y - bbox.y
+            vertices[vertex_name] = (rel_x, rel_y)
+        
+        # Convert to screen coordinates using the same logic as diamond lines
+        screen_vertices = {}
+        for vertex_name, (rel_x, rel_y) in vertices.items():
+            screen_x = sprite_x + scaled_bbox.x + rel_x * pixeloid_mult
+            screen_y = sprite_y + scaled_bbox.y + rel_y * pixeloid_mult
+            screen_vertices[vertex_name] = (screen_x, screen_y)
+        
+        # Draw walkability surface if in walkability mode
+        if self.sub_diamond_editing_mode == 'walkability':
+            self._draw_sub_diamond_surface(surface, screen_vertices, sub_diamond.is_walkable, pixeloid_mult)
+        
+        # Draw edges with properties
+        self._draw_sub_diamond_edges(surface, screen_vertices, sub_diamond, pixeloid_mult, sprite_x, sprite_y, scaled_bbox)
+    
+    def _draw_sub_diamond_surface(self, surface, screen_vertices, is_walkable, pixeloid_mult):
+        """Fill the sub-diamond surface based on walkability"""
+        if is_walkable is None:
+            return  # No fill for None state
+        
+        # Create polygon points for the diamond
+        points = [
+            screen_vertices['N'],  # North
+            screen_vertices['E'],  # East
+            screen_vertices['S'],  # South
+            screen_vertices['W']   # West
+        ]
+        
+        # Filter points that are within drawing area
+        valid_points = []
+        for x, y in points:
+            if 0 <= x < self.DRAWING_AREA_WIDTH and 0 <= y < self.DRAWING_AREA_HEIGHT:
+                valid_points.append((x, y))
+        
+        if len(valid_points) >= 3:  # Need at least 3 points for a polygon
+            # Choose color based on walkability
+            if is_walkable:
+                color = (0, 255, 0, 100)  # Green with transparency
+            else:
+                color = (255, 0, 0, 100)  # Red with transparency
+            
+            # Create a temporary surface for alpha blending
+            temp_surface = pygame.Surface((self.DRAWING_AREA_WIDTH, self.DRAWING_AREA_HEIGHT))
+            temp_surface.set_alpha(100)
+            temp_surface.fill((0, 0, 0))
+            temp_surface.set_colorkey((0, 0, 0))
+            
+            pygame.draw.polygon(temp_surface, color[:3], valid_points)
+            surface.blit(temp_surface, (0, 0))
+    
+    def _draw_sub_diamond_edges(self, surface, screen_vertices, sub_diamond, pixeloid_mult, sprite_x, sprite_y, scaled_bbox):
+        """Draw sub-diamond edges with pixeloid-perfect rendering using the same approach as diamond lines"""
+        
+        # Define edge connections and their property names
+        edges = [
+            ('N', 'W', 'north_west_edge'),   # North to West
+            ('N', 'E', 'north_east_edge'),   # North to East
+            ('S', 'W', 'south_west_edge'),   # South to West
+            ('S', 'E', 'south_east_edge')    # South to East
+        ]
+        
+        # Convert screen vertices back to bbox-relative coordinates (same as diamond lines)
+        bbox_rel_vertices = {}
+        for vertex_name, (screen_x, screen_y) in screen_vertices.items():
+            rel_x = (screen_x - sprite_x - scaled_bbox.x) // pixeloid_mult
+            rel_y = (screen_y - sprite_y - scaled_bbox.y) // pixeloid_mult
+            bbox_rel_vertices[vertex_name] = (rel_x, rel_y)
+        
+        for start_vertex, end_vertex, edge_attr in edges:
+            if start_vertex not in bbox_rel_vertices or end_vertex not in bbox_rel_vertices:
+                continue
+            
+            # Get edge properties
+            edge_props = getattr(sub_diamond, edge_attr, None)
+            if not edge_props:
+                continue
+            
+            # Determine color based on edge properties
+            if self.sub_diamond_editing_mode == 'line_of_sight':
+                color = self._get_los_color(edge_props.blocks_line_of_sight)
+            else:  # walkability mode
+                color = self._get_movement_color(edge_props.blocks_movement)
+            
+            # Get bbox-relative coordinates
+            start_pos = bbox_rel_vertices[start_vertex]
+            end_pos = bbox_rel_vertices[end_vertex]
+            
+            # Trace pixeloid line between vertices (same as diamond lines)
+            line_points = self._trace_pixeloid_line(start_pos[0], start_pos[1], end_pos[0], end_pos[1])
+            
+            # Draw each point as a pixeloid square (same coordinate system as diamond lines)
+            for rel_x, rel_y in line_points:
+                screen_x = sprite_x + scaled_bbox.x + rel_x * pixeloid_mult
+                screen_y = sprite_y + scaled_bbox.y + rel_y * pixeloid_mult
+                
+                # Only draw if within drawing area bounds
+                if (screen_x >= 0 and screen_x < self.DRAWING_AREA_WIDTH and
+                    screen_y >= 0 and screen_y < self.DRAWING_AREA_HEIGHT):
+                    pygame.draw.rect(surface, color, (screen_x, screen_y, pixeloid_mult, pixeloid_mult))
+    
+    def _get_los_color(self, blocks_line_of_sight):
+        """Get color for line of sight property"""
+        if blocks_line_of_sight is None:
+            return (128, 128, 128)  # Gray for None
+        elif blocks_line_of_sight:
+            return (255, 0, 0)  # Red for blocks line of sight
+        else:
+            return (0, 255, 0)  # Green for does not block line of sight
+    
+    def _get_movement_color(self, blocks_movement):
+        """Get color for movement property"""
+        if blocks_movement is None:
+            return (128, 128, 128)  # Gray for None
+        elif blocks_movement:
+            return (255, 0, 0)  # Red for blocks movement
+        else:
+            return (0, 255, 0)  # Green for allows movement
+    
+    def _get_combined_edge_color(self, line_of_sight, blocks_movement):
+        """Get combined color for both line of sight and movement properties"""
+        if line_of_sight is None and blocks_movement is None:
+            return (128, 128, 128)  # Gray for both None
+        
+        can_see = line_of_sight if line_of_sight is not None else False
+        can_walk = not blocks_movement if blocks_movement is not None else False
+        
+        # Color combinations as specified:
+        # both see and walk: green
+        # no see no walk: red
+        # see no walk: blue
+        # no see walk: purple
+        if can_see and can_walk:
+            return (0, 255, 0)      # Green
+        elif not can_see and not can_walk:
+            return (255, 0, 0)      # Red
+        elif can_see and not can_walk:
+            return (0, 0, 255)      # Blue
+        elif not can_see and can_walk:
+            return (128, 0, 128)    # Purple
+        else:
+            return (128, 128, 128)  # Default gray

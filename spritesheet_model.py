@@ -19,6 +19,51 @@ class AssetType(str, Enum):
     DOOR = "door"
     STAIR = "stair"
 
+class EdgeProperty(str, Enum):
+    """
+    Edge properties for line of sight and movement blocking.
+    
+    Used to define how edges of sub-diamonds affect game mechanics:
+    - NONE: Edge has no blocking properties (default/unset)
+    - BLOCKS: Edge blocks both line of sight and movement
+    - TRANSPARENT: Edge allows line of sight but blocks movement
+    - PASSABLE: Edge allows both line of sight and movement
+    """
+    NONE = "none"
+    BLOCKS = "blocks"
+    TRANSPARENT = "transparent"
+    PASSABLE = "passable"
+
+class EdgeProperties(BaseModel):
+    """
+    Properties for an edge defining its interaction with game mechanics.
+    
+    Each edge can independently control line of sight and movement blocking
+    for fine-grained control over game mechanics like walls, windows, etc.
+    """
+    blocks_line_of_sight: Optional[bool] = Field(
+        default=None,
+        description="Whether this edge blocks line of sight (None=unset, True=blocks, False=transparent)"
+    )
+    blocks_movement: Optional[bool] = Field(
+        default=None,
+        description="Whether this edge blocks movement (None=unset, True=blocks, False=passable)"
+    )
+    
+    def get_combined_property(self) -> EdgeProperty:
+        """Get the combined edge property enum value"""
+        if self.blocks_line_of_sight is None and self.blocks_movement is None:
+            return EdgeProperty.NONE
+        elif self.blocks_line_of_sight is True and self.blocks_movement is True:
+            return EdgeProperty.BLOCKS
+        elif self.blocks_line_of_sight is False and self.blocks_movement is True:
+            return EdgeProperty.TRANSPARENT
+        elif self.blocks_line_of_sight is False and self.blocks_movement is False:
+            return EdgeProperty.PASSABLE
+        else:
+            # Mixed or partial settings - default to blocks for safety
+            return EdgeProperty.BLOCKS
+
 class Point(BaseModel):
     """
     A 2D point representing a pixel coordinate in the sprite analysis.
@@ -39,6 +84,49 @@ class Point(BaseModel):
         if not isinstance(other, Point):
             return False
         return self.x == other.x and self.y == other.y
+
+class SubDiamondData(BaseModel):
+    """
+    Data for a single sub-diamond quadrant within a main diamond.
+    
+    Each main diamond contains 4 sub-diamonds (North, South, East, West quadrants)
+    that divide the isometric tile for granular game mechanics control.
+    
+    Sub-diamonds are proper diamond shapes with 4 vertices, just like the main diamond.
+    Each has its own edge properties for the 4 edges of the diamond.
+    """
+    quadrant: str = Field(..., description="Quadrant name: 'north', 'south', 'east', or 'west'")
+    
+    # Vertices defining this sub-diamond (proper diamond shape with 4 corners)
+    north_vertex: Point = Field(..., description="North corner of this sub-diamond")
+    south_vertex: Point = Field(..., description="South corner of this sub-diamond")
+    east_vertex: Point = Field(..., description="East corner of this sub-diamond")
+    west_vertex: Point = Field(..., description="West corner of this sub-diamond")
+    center: Point = Field(..., description="Center point of this sub-diamond")
+    
+    # Gameplay properties
+    is_walkable: Optional[bool] = Field(
+        default=None,
+        description="Whether this sub-diamond surface is walkable (None=unset, True=floor, False=block)"
+    )
+    
+    # Edge properties for this sub-diamond's 4 edges
+    north_west_edge: EdgeProperties = Field(
+        default_factory=EdgeProperties,
+        description="Properties for the north-west edge of this sub-diamond"
+    )
+    north_east_edge: EdgeProperties = Field(
+        default_factory=EdgeProperties,
+        description="Properties for the north-east edge of this sub-diamond"
+    )
+    south_west_edge: EdgeProperties = Field(
+        default_factory=EdgeProperties,
+        description="Properties for the south-west edge of this sub-diamond"
+    )
+    south_east_edge: EdgeProperties = Field(
+        default_factory=EdgeProperties,
+        description="Properties for the south-east edge of this sub-diamond"
+    )
 
 class BoundingBox(BaseModel):
     """
@@ -74,6 +162,188 @@ class SingleDiamondData(BaseModel):
     south_west_midpoint: Optional[Point] = Field(default=None, description="Midpoint between south and west vertices")
     west_north_midpoint: Optional[Point] = Field(default=None, description="Midpoint between west and north vertices")
 
+class GameplayDiamondData(BaseModel):
+    """
+    Extended diamond data with gameplay mechanics for isometric grid placement.
+    
+    Includes all geometric data from SingleDiamondData plus:
+    - 4 sub-diamonds (quadrants) for granular game mechanics
+    - Edge properties for line of sight and movement blocking
+    - Surface walkability per sub-diamond
+    """
+    # Core geometric data (same as SingleDiamondData)
+    north_vertex: Point = Field(..., description="North corner of the diamond (top point)")
+    south_vertex: Point = Field(..., description="South corner of the diamond (bottom point)")
+    east_vertex: Point = Field(..., description="East corner of the diamond (right point)")
+    west_vertex: Point = Field(..., description="West corner of the diamond (left point)")
+    center: Point = Field(..., description="Center point of the diamond for positioning")
+    z_offset: float = Field(..., description="Z elevation offset from sprite base in pixels")
+    
+    # Midpoints (required for sub-diamond calculation)
+    north_east_midpoint: Optional[Point] = Field(default=None, description="Midpoint between north and east vertices")
+    east_south_midpoint: Optional[Point] = Field(default=None, description="Midpoint between east and south vertices")
+    south_west_midpoint: Optional[Point] = Field(default=None, description="Midpoint between south and west vertices")
+    west_north_midpoint: Optional[Point] = Field(default=None, description="Midpoint between west and north vertices")
+    
+    # Gameplay mechanics
+    sub_diamonds: Dict[str, SubDiamondData] = Field(
+        default_factory=dict,
+        description="4 sub-diamond quadrants (north, south, east, west) for granular game mechanics"
+    )
+    
+    @classmethod
+    def from_single_diamond(cls, single_diamond: SingleDiamondData) -> 'GameplayDiamondData':
+        """Create gameplay diamond from existing SingleDiamondData"""
+        gameplay_diamond = cls(
+            north_vertex=single_diamond.north_vertex,
+            south_vertex=single_diamond.south_vertex,
+            east_vertex=single_diamond.east_vertex,
+            west_vertex=single_diamond.west_vertex,
+            center=single_diamond.center,
+            z_offset=single_diamond.z_offset,
+            north_east_midpoint=single_diamond.north_east_midpoint,
+            east_south_midpoint=single_diamond.east_south_midpoint,
+            south_west_midpoint=single_diamond.south_west_midpoint,
+            west_north_midpoint=single_diamond.west_north_midpoint
+        )
+        
+        # Initialize sub-diamonds and edges if midpoints are available
+        if all([
+            single_diamond.north_east_midpoint,
+            single_diamond.east_south_midpoint,
+            single_diamond.south_west_midpoint,
+            single_diamond.west_north_midpoint
+        ]):
+            gameplay_diamond._initialize_sub_diamonds_and_edges()
+        
+        return gameplay_diamond
+    
+    def _initialize_sub_diamonds_and_edges(self):
+        """Initialize the 4 sub-diamonds and their edge properties"""
+        # Calculate midpoints if they don't exist
+        self._ensure_midpoints_calculated()
+        
+        if not all([self.north_east_midpoint, self.east_south_midpoint,
+                   self.south_west_midpoint, self.west_north_midpoint]):
+            return
+        
+        # Type assertions - we know these are not None due to the check above
+        assert self.north_east_midpoint is not None
+        assert self.east_south_midpoint is not None
+        assert self.south_west_midpoint is not None
+        assert self.west_north_midpoint is not None
+            
+        # Calculate the true geometric center of the main diamond (intersection of diagonals)
+        true_center = Point(
+            x=(self.north_vertex.x + self.south_vertex.x) // 2,
+            y=(self.north_vertex.y + self.south_vertex.y) // 2
+        )
+        
+        # Create sub-diamonds for each quadrant - each is a proper diamond with 4 vertices
+        self.sub_diamonds = {
+            'north': SubDiamondData(
+                quadrant='north',
+                north_vertex=self.north_vertex,          # Main vertex (tip of the quadrant)
+                south_vertex=true_center,                # True center of main diamond
+                east_vertex=self.north_east_midpoint,    # Midpoint to east
+                west_vertex=self.west_north_midpoint,    # Midpoint to west
+                center=Point(  # Center of this sub-diamond
+                    x=(self.north_vertex.x + true_center.x) // 2,
+                    y=(self.north_vertex.y + true_center.y) // 2
+                )
+            ),
+            'south': SubDiamondData(
+                quadrant='south',
+                north_vertex=true_center,               # True center of main diamond
+                south_vertex=self.south_vertex,         # Main vertex (tip of the quadrant)
+                east_vertex=self.east_south_midpoint,   # Midpoint to east
+                west_vertex=self.south_west_midpoint,   # Midpoint to west
+                center=Point(  # Center of this sub-diamond
+                    x=(self.south_vertex.x + true_center.x) // 2,
+                    y=(self.south_vertex.y + true_center.y) // 2
+                )
+            ),
+            'east': SubDiamondData(
+                quadrant='east',
+                north_vertex=self.north_east_midpoint,  # Midpoint to north
+                south_vertex=self.east_south_midpoint,  # Midpoint to south
+                east_vertex=self.east_vertex,           # Main vertex (tip of the quadrant)
+                west_vertex=true_center,                # True center of main diamond
+                center=Point(  # Center of this sub-diamond
+                    x=(self.east_vertex.x + true_center.x) // 2,
+                    y=(self.east_vertex.y + true_center.y) // 2
+                )
+            ),
+            'west': SubDiamondData(
+                quadrant='west',
+                north_vertex=self.west_north_midpoint,  # Midpoint to north
+                south_vertex=self.south_west_midpoint,  # Midpoint to south
+                east_vertex=true_center,                # True center of main diamond
+                west_vertex=self.west_vertex,           # Main vertex (tip of the quadrant)
+                center=Point(  # Center of this sub-diamond
+                    x=(self.west_vertex.x + true_center.x) // 2,
+                    y=(self.west_vertex.y + true_center.y) // 2
+                )
+            )
+        }
+    
+    def _ensure_midpoints_calculated(self):
+        """Ensure midpoints are calculated between diamond vertices"""
+        # Calculate midpoints if they don't exist
+        if not self.north_east_midpoint:
+            self.north_east_midpoint = Point(
+                x=(self.north_vertex.x + self.east_vertex.x) // 2,
+                y=(self.north_vertex.y + self.east_vertex.y) // 2
+            )
+        
+        if not self.east_south_midpoint:
+            self.east_south_midpoint = Point(
+                x=(self.east_vertex.x + self.south_vertex.x) // 2,
+                y=(self.east_vertex.y + self.south_vertex.y) // 2
+            )
+        
+        if not self.south_west_midpoint:
+            self.south_west_midpoint = Point(
+                x=(self.south_vertex.x + self.west_vertex.x) // 2,
+                y=(self.south_vertex.y + self.west_vertex.y) // 2
+            )
+        
+        if not self.west_north_midpoint:
+            self.west_north_midpoint = Point(
+                x=(self.west_vertex.x + self.north_vertex.x) // 2,
+                y=(self.west_vertex.y + self.north_vertex.y) // 2
+            )
+    
+    def ensure_sub_diamonds_initialized(self):
+        """Public method to ensure sub-diamonds are properly initialized"""
+        if not self.sub_diamonds:
+            self._initialize_sub_diamonds_and_edges()
+    
+    def set_sub_diamond_walkability(self, quadrant: str, is_walkable: bool):
+        """Set walkability for a specific sub-diamond quadrant"""
+        if quadrant in self.sub_diamonds:
+            self.sub_diamonds[quadrant].is_walkable = is_walkable
+    
+    def get_walkable_quadrants(self) -> List[str]:
+        """Get list of walkable quadrant names"""
+        return [
+            quadrant for quadrant, data in self.sub_diamonds.items()
+            if data.is_walkable is True
+        ]
+    
+    def set_sub_diamond_edge_property(self, quadrant: str, edge: str, blocks_line_of_sight: Optional[bool] = None,
+                                    blocks_movement: Optional[bool] = None):
+        """Set properties for a specific sub-diamond edge"""
+        if quadrant in self.sub_diamonds:
+            sub_diamond = self.sub_diamonds[quadrant]
+            edge_attr = f"{edge}_edge"
+            if hasattr(sub_diamond, edge_attr):
+                edge_props = getattr(sub_diamond, edge_attr)
+                if blocks_line_of_sight is not None:
+                    edge_props.blocks_line_of_sight = blocks_line_of_sight
+                if blocks_movement is not None:
+                    edge_props.blocks_movement = blocks_movement
+
 class DiamondInfo(BaseModel):
     """
     Complete geometric analysis of the two-diamond isometric tile structure.
@@ -95,9 +365,9 @@ class DiamondInfo(BaseModel):
     upper_z_line_y: Optional[float] = Field(None, description="Y-coordinate of the upper diamond separation line when upper_z_offset is used")
     
     # New explicit diamond data for procedural generation
-    lower_diamond: SingleDiamondData = Field(..., description="Lower diamond structure with vertices, center, and z-offset (always 0)")
-    upper_diamond: Optional[SingleDiamondData] = Field(None, description="Upper diamond structure (when upper_z_offset > 0)")
-    extra_diamonds: Dict[str, SingleDiamondData] = Field(default_factory=dict, description="Custom named diamonds with their own z-offsets")
+    lower_diamond: GameplayDiamondData = Field(..., description="Lower diamond structure with vertices, center, and z-offset (always 0)")
+    upper_diamond: Optional[GameplayDiamondData] = Field(None, description="Upper diamond structure (when upper_z_offset > 0)")
+    extra_diamonds: Dict[str, GameplayDiamondData] = Field(default_factory=dict, description="Custom named diamonds with their own z-offsets")
     
     # Derived measurements
     diamond_width: float = Field(..., description="Width of the diamond (distance between east and west vertices)")
@@ -606,7 +876,7 @@ class SpritesheetModel(BaseModel):
         
         return exported
     
-    def _export_single_diamond(self, diamond: SingleDiamondData, sprite_index: int, diamond_level: str, lower_north_y: int) -> Dict[str, Any]:
+    def _export_single_diamond(self, diamond: GameplayDiamondData, sprite_index: int, diamond_level: str, lower_north_y: int) -> Dict[str, Any]:
         """Export a single diamond with all vertices and computed midpoints using correct coordinates and calculated z_offset"""
         # Get the correct vertex coordinates (manual overrides if present, otherwise algorithmic)
         vertices = self._get_export_vertex_coords(diamond, sprite_index, diamond_level)
@@ -642,9 +912,39 @@ class SpritesheetModel(BaseModel):
             'y': (vertices['west'][1] + vertices['north'][1]) // 2
         }
         
+        # Export sub-diamonds if present
+        if diamond.sub_diamonds:
+            exported['sub_diamonds'] = {}
+            for quadrant, sub_diamond in diamond.sub_diamonds.items():
+                sub_exported = {
+                    'quadrant': sub_diamond.quadrant,
+                    'north_vertex': {'x': sub_diamond.north_vertex.x, 'y': sub_diamond.north_vertex.y},
+                    'south_vertex': {'x': sub_diamond.south_vertex.x, 'y': sub_diamond.south_vertex.y},
+                    'east_vertex': {'x': sub_diamond.east_vertex.x, 'y': sub_diamond.east_vertex.y},
+                    'west_vertex': {'x': sub_diamond.west_vertex.x, 'y': sub_diamond.west_vertex.y},
+                    'center': {'x': sub_diamond.center.x, 'y': sub_diamond.center.y},
+                    'is_walkable': sub_diamond.is_walkable
+                }
+                
+                # Export edge properties for this sub-diamond (always include, even if default)
+                edge_props = {}
+                for edge_name in ['north_west', 'north_east', 'south_west', 'south_east']:
+                    edge_attr = f"{edge_name}_edge"
+                    if hasattr(sub_diamond, edge_attr):
+                        edge = getattr(sub_diamond, edge_attr)
+                        edge_props[edge_name] = {
+                            'blocks_line_of_sight': edge.blocks_line_of_sight,
+                            'blocks_movement': edge.blocks_movement
+                        }
+                
+                # Always include edge properties structure
+                sub_exported['edge_properties'] = edge_props
+                
+                exported['sub_diamonds'][quadrant] = sub_exported
+        
         return exported
     
-    def _get_export_vertex_coords(self, diamond: SingleDiamondData, sprite_index: int, diamond_level: str) -> Dict[str, Tuple[int, int]]:
+    def _get_export_vertex_coords(self, diamond: GameplayDiamondData, sprite_index: int, diamond_level: str) -> Dict[str, Tuple[int, int]]:
         """Get vertex coordinates for export, using manual overrides if present"""
         # Access the renderer's manual vertices if available
         manual_vertices = getattr(self, '_renderer_manual_vertices', {})
@@ -902,9 +1202,10 @@ class SpritesheetModel(BaseModel):
         )
     
     @classmethod
-    def _import_single_diamond(cls, diamond_data: Dict[str, Any]) -> SingleDiamondData:
+    def _import_single_diamond(cls, diamond_data: Dict[str, Any]) -> GameplayDiamondData:
         """Import a single diamond from clean JSON format"""
-        return SingleDiamondData(
+        # Create basic GameplayDiamondData
+        gameplay_diamond = GameplayDiamondData(
             north_vertex=Point(x=diamond_data['north_vertex']['x'], y=diamond_data['north_vertex']['y']),
             south_vertex=Point(x=diamond_data['south_vertex']['x'], y=diamond_data['south_vertex']['y']),
             east_vertex=Point(x=diamond_data['east_vertex']['x'], y=diamond_data['east_vertex']['y']),
@@ -917,6 +1218,86 @@ class SpritesheetModel(BaseModel):
             south_west_midpoint=Point(x=diamond_data['south_west_midpoint']['x'], y=diamond_data['south_west_midpoint']['y']) if 'south_west_midpoint' in diamond_data else None,
             west_north_midpoint=Point(x=diamond_data['west_north_midpoint']['x'], y=diamond_data['west_north_midpoint']['y']) if 'west_north_midpoint' in diamond_data else None
         )
+        
+        # Import sub-diamonds if present
+        if 'sub_diamonds' in diamond_data and diamond_data['sub_diamonds']:
+            gameplay_diamond.sub_diamonds = {}
+            for quadrant, sub_data in diamond_data['sub_diamonds'].items():
+                # Handle both old format (main_vertex/midpoint_a/midpoint_b) and new format (4 vertices)
+                if 'north_vertex' in sub_data:
+                    # New format with proper 4 vertices
+                    sub_diamond = SubDiamondData(
+                        quadrant=sub_data['quadrant'],
+                        north_vertex=Point(x=sub_data['north_vertex']['x'], y=sub_data['north_vertex']['y']),
+                        south_vertex=Point(x=sub_data['south_vertex']['x'], y=sub_data['south_vertex']['y']),
+                        east_vertex=Point(x=sub_data['east_vertex']['x'], y=sub_data['east_vertex']['y']),
+                        west_vertex=Point(x=sub_data['west_vertex']['x'], y=sub_data['west_vertex']['y']),
+                        center=Point(x=sub_data['center']['x'], y=sub_data['center']['y']),
+                        is_walkable=sub_data.get('is_walkable')
+                    )
+                    
+                    # Import edge properties for this sub-diamond if present
+                    if 'edge_properties' in sub_data:
+                        for edge_name, edge_data in sub_data['edge_properties'].items():
+                            edge_attr = f"{edge_name}_edge"
+                            if hasattr(sub_diamond, edge_attr):
+                                edge_props = EdgeProperties(
+                                    blocks_line_of_sight=edge_data.get('blocks_line_of_sight'),
+                                    blocks_movement=edge_data.get('blocks_movement')
+                                )
+                                setattr(sub_diamond, edge_attr, edge_props)
+                    
+                    gameplay_diamond.sub_diamonds[quadrant] = sub_diamond
+                else:
+                    # Old format - convert triangular to diamond shape (no edge properties to import)
+                    main_vertex = Point(x=sub_data['main_vertex']['x'], y=sub_data['main_vertex']['y'])
+                    midpoint_a = Point(x=sub_data['midpoint_a']['x'], y=sub_data['midpoint_a']['y'])
+                    midpoint_b = Point(x=sub_data['midpoint_b']['x'], y=sub_data['midpoint_b']['y'])
+                    center = Point(x=sub_data['center']['x'], y=sub_data['center']['y'])
+                    
+                    # Convert to diamond format based on quadrant
+                    if quadrant == 'north':
+                        gameplay_diamond.sub_diamonds[quadrant] = SubDiamondData(
+                            quadrant=quadrant,
+                            north_vertex=main_vertex,
+                            south_vertex=center,
+                            east_vertex=midpoint_b,
+                            west_vertex=midpoint_a,
+                            center=Point(x=(main_vertex.x + center.x) // 2, y=(main_vertex.y + center.y) // 2),
+                            is_walkable=sub_data.get('is_walkable')
+                        )
+                    elif quadrant == 'south':
+                        gameplay_diamond.sub_diamonds[quadrant] = SubDiamondData(
+                            quadrant=quadrant,
+                            north_vertex=center,
+                            south_vertex=main_vertex,
+                            east_vertex=midpoint_b,
+                            west_vertex=midpoint_a,
+                            center=Point(x=(main_vertex.x + center.x) // 2, y=(main_vertex.y + center.y) // 2),
+                            is_walkable=sub_data.get('is_walkable')
+                        )
+                    elif quadrant == 'east':
+                        gameplay_diamond.sub_diamonds[quadrant] = SubDiamondData(
+                            quadrant=quadrant,
+                            north_vertex=midpoint_a,
+                            south_vertex=midpoint_b,
+                            east_vertex=main_vertex,
+                            west_vertex=center,
+                            center=Point(x=(main_vertex.x + center.x) // 2, y=(main_vertex.y + center.y) // 2),
+                            is_walkable=sub_data.get('is_walkable')
+                        )
+                    elif quadrant == 'west':
+                        gameplay_diamond.sub_diamonds[quadrant] = SubDiamondData(
+                            quadrant=quadrant,
+                            north_vertex=midpoint_a,
+                            south_vertex=midpoint_b,
+                            east_vertex=center,
+                            west_vertex=main_vertex,
+                            center=Point(x=(main_vertex.x + center.x) // 2, y=(main_vertex.y + center.y) // 2),
+                            is_walkable=sub_data.get('is_walkable')
+                        )
+        
+        return gameplay_diamond
     
     def set_manual_vertices_for_export(self, manual_vertices: Dict[int, Dict[str, Dict[str, Tuple[int, int]]]]):
         """Set manual vertices data from renderer for export"""

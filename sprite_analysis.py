@@ -2,7 +2,7 @@ import pygame
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 from spritesheet_model import (
-    SpritesheetModel, SpriteData, BoundingBox, DiamondInfo, SingleDiamondData,
+    SpritesheetModel, SpriteData, BoundingBox, DiamondInfo, SingleDiamondData, GameplayDiamondData,
     EdgeContactPoints, IsometricAnalysis, DetailedAnalysis, Point, AssetType,
     point_from_tuple, points_from_list, bbox_from_pygame_rect
 )
@@ -110,7 +110,7 @@ class SpriteAnalyzer:
     
     def _calculate_diamond_vertices_from_lines(self, bbox: BoundingBox, sprite_index: int, detailed_analysis: DetailedAnalysis) -> DiamondInfo:
         """Calculate diamond vertices using the already-computed isometric lines instead of duplicating work"""
-        from spritesheet_model import SingleDiamondData, Point
+        from spritesheet_model import GameplayDiamondData, Point
         
         # Use frame-specific Z-offset and diamond width
         effective_upper_z = self.model.get_effective_upper_z_offset(sprite_index)
@@ -180,14 +180,22 @@ class SpriteAnalyzer:
         
         # Create lower diamond data using the extracted/computed vertices (midpoints computed at save time)
         # Lower diamond always has z_offset=0 as it's the reference point
-        lower_diamond = SingleDiamondData(
+        lower_diamond_single = SingleDiamondData(
             north_vertex=Point(x=north_x, y=north_y),
             south_vertex=Point(x=south_x, y=south_y),
             east_vertex=Point(x=east_x, y=east_y),
             west_vertex=Point(x=west_x, y=west_y),
             center=Point(x=lower_center_x, y=lower_center_y),
-            z_offset=0.0
+            z_offset=0.0,
+            # Add computed midpoints for sub-diamond initialization
+            north_east_midpoint=Point(x=(north_x + east_x) // 2, y=(north_y + east_y) // 2),
+            east_south_midpoint=Point(x=(east_x + south_x) // 2, y=(east_y + south_y) // 2),
+            south_west_midpoint=Point(x=(south_x + west_x) // 2, y=(south_y + west_y) // 2),
+            west_north_midpoint=Point(x=(west_x + north_x) // 2, y=(west_y + north_y) // 2)
         )
+        
+        # Convert to GameplayDiamondData with sub-diamonds and edges
+        lower_diamond = GameplayDiamondData.from_single_diamond(lower_diamond_single)
         
         # Create upper diamond if there's a significant lower_z_offset (predicted_flat_height)
         upper_diamond = None
@@ -208,14 +216,22 @@ class SpriteAnalyzer:
             upper_center_x = lower_center_x
             upper_center_y = lower_center_y - int(diamond_height)
             
-            upper_diamond = SingleDiamondData(
+            upper_diamond_single = SingleDiamondData(
                 north_vertex=Point(x=upper_north_x, y=upper_north_y),
                 south_vertex=Point(x=upper_south_x, y=upper_south_y),
                 east_vertex=Point(x=upper_east_x, y=upper_east_y),
                 west_vertex=Point(x=upper_west_x, y=upper_west_y),
                 center=Point(x=upper_center_x, y=upper_center_y),
-                z_offset=float(diamond_height)  # Z-offset from lower diamond (negative Y direction)
+                z_offset=float(diamond_height),  # Z-offset from lower diamond (negative Y direction)
+                # Add computed midpoints for sub-diamond initialization
+                north_east_midpoint=Point(x=(upper_north_x + upper_east_x) // 2, y=(upper_north_y + upper_east_y) // 2),
+                east_south_midpoint=Point(x=(upper_east_x + upper_south_x) // 2, y=(upper_east_y + upper_south_y) // 2),
+                south_west_midpoint=Point(x=(upper_south_x + upper_west_x) // 2, y=(upper_south_y + upper_west_y) // 2),
+                west_north_midpoint=Point(x=(upper_west_x + upper_north_x) // 2, y=(upper_west_y + upper_north_y) // 2)
             )
+            
+            # Convert to GameplayDiamondData with sub-diamonds and edges
+            upper_diamond = GameplayDiamondData.from_single_diamond(upper_diamond_single)
         
         # Calculate diamonds_z_offset: Y difference between lower and upper diamond north vertices
         diamonds_z_offset = None
@@ -230,8 +246,8 @@ class SpriteAnalyzer:
             line_y=diamond_line_y,
             upper_z_line_y=upper_z_line_y,
             # New explicit diamond data using raycast results
-            lower_diamond=lower_diamond,
-            upper_diamond=upper_diamond,
+            lower_diamond=lower_diamond,  # This is now GameplayDiamondData
+            upper_diamond=upper_diamond,  # This is now GameplayDiamondData or None
             extra_diamonds={},  # Initialize empty, will be populated by manual creation
             diamond_width=diamond_width,
             lower_z_offset=lower_z_offset,

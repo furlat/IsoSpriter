@@ -207,6 +207,13 @@ class AnalysisControlsPanel:
         )
         current_y += 35
         
+        self.components['sub_diamond_mode_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 30),
+            text='Sub-Diamond Mode: OFF',
+            manager=self.manager
+        )
+        current_y += 35
+        
         # Auto-populate button (initially hidden)
         self.components['auto_populate_button'] = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 30),
@@ -352,4 +359,68 @@ class ViewControlsPanel:
         current_y += 50
         
         self.height = current_y - self.start_y
+
+
+class SubDiamondControlsPanel:
+    """Component for sub-diamond editing controls and status"""
+    
+    def __init__(self, manager, start_x, start_y, panel_width):
+        self.manager = manager
+        self.start_x = start_x
+        self.start_y = start_y
+        self.panel_width = panel_width
+        self.components = {}
+        self.create_components()
+    
+    def create_components(self):
+        current_y = self.start_y + 10
+        
+        # Sub-diamond mode status
+        self.components['mode_status_label'] = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 25),
+            text='Sub-Diamond Mode: OFF',
+            manager=self.manager
+        )
+        current_y += 30
+        
+        # Current layer
+        self.components['layer_status_label'] = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 25),
+            text='Layer: LOWER',
+            manager=self.manager
+        )
+        current_y += 30
+        
+        # Current editing mode
+        self.components['editing_mode_label'] = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 25),
+            text='Editing: WALKABILITY',
+            manager=self.manager
+        )
+        current_y += 30
+        
+        # Instructions
+        self.components['instructions_label'] = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 75),
+            text='Controls:\nF1/F2: Lower/Upper Diamond\nF3: Cycle Layers\n1: Line of Sight, 2: Walkability\nLeft Click: Toggle, Right Click: None',
+            manager=self.manager
+        )
+        current_y += 85
+        
+        # Color legend
+        self.components['color_legend_label'] = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 100),
+            text='Colors:\nWalkable: Green, Not Walkable: Red\nCan See & Walk: Green\nNo See No Walk: Red\nSee No Walk: Blue\nNo See Walk: Purple\nNone: Gray',
+            manager=self.manager
+        )
+        current_y += 110
+        
+        self.height = current_y - self.start_y
+    
+    def update_status(self, sub_diamond_mode, layer, editing_mode):
+        """Update the status displays"""
+        mode_text = "ON" if sub_diamond_mode else "OFF"
+        self.components['mode_status_label'].set_text(f'Sub-Diamond Mode: {mode_text}')
+        self.components['layer_status_label'].set_text(f'Layer: {layer.upper()}')
+        self.components['editing_mode_label'].set_text(f'Editing: {editing_mode.upper().replace("_", " ")}')
 

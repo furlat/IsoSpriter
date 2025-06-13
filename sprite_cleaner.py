@@ -11,7 +11,7 @@ from sprite_analysis import SpriteAnalyzer
 from sprite_renderer import SpriteRenderer
 from ui_components import (
     FileOperationsPanel, AnalysisControlsPanel, NavigationPanel,
-    BoundingBoxInfoPanel, ViewControlsPanel
+    BoundingBoxInfoPanel, ViewControlsPanel, SubDiamondControlsPanel
 )
 from input_handlers import InputHandlers
 
@@ -88,6 +88,9 @@ class AdvancedSpritesheetUI:
         current_y = 0
         
         self.view_controls_panel = ViewControlsPanel(self.manager, right_start_x, current_y, RIGHT_PANEL_WIDTH)
+        current_y += self.view_controls_panel.height + 10
+        
+        self.sub_diamond_panel = SubDiamondControlsPanel(self.manager, right_start_x, current_y, RIGHT_PANEL_WIDTH)
     
     def get_all_ui_elements(self):
         """Get all UI elements for event handling"""
@@ -99,7 +102,8 @@ class AdvancedSpritesheetUI:
             ('analysis', self.analysis_controls_panel),
             ('navigation', self.navigation_panel),
             ('bbox', self.bbox_info_panel),
-            ('view', self.view_controls_panel)
+            ('view', self.view_controls_panel),
+            ('sub_diamond', self.sub_diamond_panel)
         ]:
             for element_name, element in panel.components.items():
                 elements[f'{panel_name}_{element_name}'] = element
@@ -271,9 +275,8 @@ class AdvancedSpritesheetUI:
                         self.input_handlers.handle_right_click(event)
                 elif event.type == pygame.KEYDOWN:
                     self.keys_pressed.add(event.key)
-                    # Handle manual vertex mode key commands
-                    if self.renderer.manual_vertex_mode:
-                        self.input_handlers.handle_manual_vertex_keys(event.key)
+                    # Handle manual vertex mode and sub-diamond key commands
+                    self.input_handlers.handle_manual_vertex_keys(event.key)
                 elif event.type == pygame.KEYUP:
                     self.keys_pressed.discard(event.key)
                 
@@ -282,6 +285,14 @@ class AdvancedSpritesheetUI:
             # Update systems
             self.manager.update(time_delta)
             self.input_handlers.update_panning(self.keys_pressed)
+            
+            # Update sub-diamond panel status
+            if hasattr(self, 'sub_diamond_panel'):
+                self.sub_diamond_panel.update_status(
+                    self.renderer.sub_diamond_mode,
+                    self.renderer.selected_sub_diamond_layer,
+                    self.renderer.sub_diamond_editing_mode
+                )
             
             # Draw everything
             self.screen.fill((40, 40, 40))

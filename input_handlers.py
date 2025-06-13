@@ -51,6 +51,8 @@ class InputHandlers:
             self.handle_toggle_raycast_analysis()
         elif event.ui_element == ui_elements['analysis_manual_vertex_button']:
             self.handle_toggle_manual_vertex_mode()
+        elif event.ui_element == ui_elements['analysis_sub_diamond_mode_button']:
+            self.handle_toggle_sub_diamond_mode()
         elif event.ui_element == ui_elements['analysis_auto_populate_button']:
             self.handle_auto_populate_vertices()
         elif event.ui_element == ui_elements['analysis_delete_keypoints_button']:
@@ -337,6 +339,13 @@ class InputHandlers:
             print("Please load a spritesheet first before using manual vertex mode")
             return
         
+        # If sub-diamond mode is active, turn it off first
+        if self.ui.renderer.sub_diamond_mode:
+            self.ui.renderer.sub_diamond_mode = False
+            self.ui.renderer.show_sub_diamonds = False
+            self.ui.analysis_controls_panel.components['sub_diamond_mode_button'].set_text('Sub-Diamond Mode: OFF')
+            print("=== SUB-DIAMOND MODE: OFF ===")
+        
         self.ui.renderer.manual_vertex_mode = not self.ui.renderer.manual_vertex_mode
         self.ui.analysis_controls_panel.components['manual_vertex_button'].set_text(
             f'Manual Vertex Mode: {"ON" if self.ui.renderer.manual_vertex_mode else "OFF"}'
@@ -375,6 +384,41 @@ class InputHandlers:
         # Also update sprite info to force fresh render
         if self.ui.renderer.manual_vertex_mode:
             self.ui.update_sprite_info()
+    
+    def handle_toggle_sub_diamond_mode(self):
+        """Handle sub-diamond mode toggle"""
+        if not self.ui.model:
+            print("Please load a spritesheet first before using sub-diamond mode")
+            return
+        
+        # If manual vertex mode is active, turn it off first
+        if self.ui.renderer.manual_vertex_mode:
+            self.ui.renderer.manual_vertex_mode = False
+            self.ui.analysis_controls_panel.components['manual_vertex_button'].set_text('Manual Vertex Mode: OFF')
+            self.ui.analysis_controls_panel.components['vertex_info_label'].visible = False
+            self.ui.analysis_controls_panel.components['auto_populate_button'].visible = False
+            self.ui.analysis_controls_panel.components['reset_vertices_button'].visible = False
+            print("=== MANUAL VERTEX MODE: OFF ===")
+        
+        self.ui.renderer.sub_diamond_mode = not self.ui.renderer.sub_diamond_mode
+        self.ui.renderer.show_sub_diamonds = self.ui.renderer.sub_diamond_mode
+        
+        self.ui.analysis_controls_panel.components['sub_diamond_mode_button'].set_text(
+            f'Sub-Diamond Mode: {"ON" if self.ui.renderer.sub_diamond_mode else "OFF"}'
+        )
+        
+        if self.ui.renderer.sub_diamond_mode:
+            print(f"\n=== SUB-DIAMOND MODE: ON ===")
+            print(f"Layer: {self.ui.renderer.selected_sub_diamond_layer.upper()}")
+            print(f"Editing: {self.ui.renderer.sub_diamond_editing_mode.upper().replace('_', ' ')}")
+            print("Controls: F1/F2=Lower/Upper, F3=Cycle Layers, 1=Line of Sight, 2=Walkability")
+            print("Left Click=Toggle, Right Click=None")
+        else:
+            print("=== SUB-DIAMOND MODE: OFF ===")
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self.ui.update_sprite_info()
     
     def _update_vertex_info_label(self):
         """Update the vertex selection info label"""
@@ -815,8 +859,12 @@ class InputHandlers:
                 self.ui.sprite_pixel_y = max(0, min(current_sprite.original_size[1] - 1, self.ui.sprite_pixel_y))
     
     def handle_left_click(self, event):
-        """Handle left-click for adding manual vertices or custom keypoints"""
+        """Handle left-click for adding manual vertices, custom keypoints, or sub-diamond editing"""
         if not self.ui.model:
+            return
+        
+        # Check sub-diamond mode first
+        if self.ui.renderer.sub_diamond_mode and self.handle_sub_diamond_click(event):
             return
         
         # Check if we're in any supported mode
@@ -842,8 +890,12 @@ class InputHandlers:
             self._handle_manual_vertex_add(original_x, original_y, event.pos)
     
     def handle_right_click(self, event):
-        """Handle right-click for removing manual vertices or custom keypoints"""
+        """Handle right-click for removing manual vertices, custom keypoints, or sub-diamond editing"""
         if not self.ui.model:
+            return
+        
+        # Check sub-diamond mode first
+        if self.ui.renderer.sub_diamond_mode and self.handle_sub_diamond_click(event):
             return
         
         # Check if we're in any supported mode
@@ -1129,6 +1181,10 @@ class InputHandlers:
     
     def handle_manual_vertex_keys(self, key):
         """Handle keyboard input for manual vertex mode and custom keypoints mode"""
+        # Handle sub-diamond mode keys first
+        if self.handle_sub_diamond_keys(key):
+            return
+        
         # F3 key toggles custom keypoints mode (works regardless of other modes)
         if key == pygame.K_F3:
             self.handle_toggle_custom_keypoints_mode()
@@ -1469,13 +1525,15 @@ class InputHandlers:
             return
         
         # Create a new empty diamond with default z_offset
-        from spritesheet_model import SingleDiamondData, Point
+        from spritesheet_model import GameplayDiamondData, Point
         
         # Start with a template based on lower diamond but with custom z_offset
         template = current_sprite.diamond_info.lower_diamond
         custom_z_offset = 50.0  # Default offset
         
-        new_diamond = SingleDiamondData(
+        # Create a temporary SingleDiamondData for conversion
+        from spritesheet_model import SingleDiamondData
+        temp_diamond = SingleDiamondData(
             north_vertex=Point(x=template.north_vertex.x, y=template.north_vertex.y - int(custom_z_offset)),
             south_vertex=Point(x=template.south_vertex.x, y=template.south_vertex.y - int(custom_z_offset)),
             east_vertex=Point(x=template.east_vertex.x, y=template.east_vertex.y - int(custom_z_offset)),
@@ -1483,6 +1541,9 @@ class InputHandlers:
             center=Point(x=template.center.x, y=template.center.y - int(custom_z_offset)),
             z_offset=custom_z_offset
         )
+        
+        # Convert to GameplayDiamondData to include sub_diamonds and edge properties
+        new_diamond = GameplayDiamondData.from_single_diamond(temp_diamond)
         
         # Add to model
         current_sprite.diamond_info.extra_diamonds[clean_name] = new_diamond
@@ -1580,3 +1641,185 @@ class InputHandlers:
         except Exception as e:
             print(f"Error showing diamond name dialog: {e}")
             return None
+    
+    def handle_sub_diamond_keys(self, key):
+        """Handle keyboard input for sub-diamond editing mode"""
+        
+        # Don't handle sub-diamond keys if manual vertex mode is active
+        if self.ui.renderer.manual_vertex_mode:
+            return False
+        
+        # F1/F2 for diamond layer selection and enabling sub-diamond mode (only if not in manual vertex mode)
+        if key == pygame.K_F1:
+            self.ui.renderer.selected_sub_diamond_layer = 'lower'
+            self.ui.renderer.sub_diamond_mode = True
+            self.ui.renderer.show_sub_diamonds = True
+            self.ui.analysis_controls_panel.components['sub_diamond_mode_button'].set_text('Sub-Diamond Mode: ON')
+            print(f"Sub-diamond mode: ON - Layer: LOWER - Mode: {self.ui.renderer.sub_diamond_editing_mode}")
+            self.ui.renderer._clear_sprite_display_cache()
+            return True
+        elif key == pygame.K_F2:
+            self.ui.renderer.selected_sub_diamond_layer = 'upper'
+            self.ui.renderer.sub_diamond_mode = True
+            self.ui.renderer.show_sub_diamonds = True
+            self.ui.analysis_controls_panel.components['sub_diamond_mode_button'].set_text('Sub-Diamond Mode: ON')
+            print(f"Sub-diamond mode: ON - Layer: UPPER - Mode: {self.ui.renderer.sub_diamond_editing_mode}")
+            self.ui.renderer._clear_sprite_display_cache()
+            return True
+        
+        # F3 for cycling through custom diamond layers if in sub-diamond mode
+        elif key == pygame.K_F3 and self.ui.renderer.sub_diamond_mode:
+            if not self.ui.model:
+                return True
+            
+            current_sprite = self.ui.model.get_current_sprite()
+            if not current_sprite or not current_sprite.diamond_info:
+                return True
+            
+            # Get available layers: lower, upper, custom diamonds
+            available_layers = ['lower']
+            if current_sprite.diamond_info.upper_diamond:
+                available_layers.append('upper')
+            if current_sprite.diamond_info.extra_diamonds:
+                available_layers.extend(current_sprite.diamond_info.extra_diamonds.keys())
+            
+            # Cycle to next layer
+            try:
+                current_index = available_layers.index(self.ui.renderer.selected_sub_diamond_layer)
+                next_index = (current_index + 1) % len(available_layers)
+                self.ui.renderer.selected_sub_diamond_layer = available_layers[next_index]
+                print(f"Sub-diamond layer: {self.ui.renderer.selected_sub_diamond_layer.upper()}")
+                self.ui.renderer._clear_sprite_display_cache()
+            except ValueError:
+                # Current layer not found, default to lower
+                self.ui.renderer.selected_sub_diamond_layer = 'lower'
+            
+            return True
+        
+        # 1/2 keys for editing mode selection
+        elif key == pygame.K_1:
+            self.ui.renderer.sub_diamond_editing_mode = 'line_of_sight'
+            if not self.ui.renderer.sub_diamond_mode:
+                self.ui.renderer.sub_diamond_mode = True
+                self.ui.renderer.show_sub_diamonds = True
+            print(f"Sub-diamond editing mode: LINE OF SIGHT")
+            self.ui.renderer._clear_sprite_display_cache()
+            return True
+        elif key == pygame.K_2:
+            self.ui.renderer.sub_diamond_editing_mode = 'walkability'
+            if not self.ui.renderer.sub_diamond_mode:
+                self.ui.renderer.sub_diamond_mode = True
+                self.ui.renderer.show_sub_diamonds = True
+            print(f"Sub-diamond editing mode: WALKABILITY")
+            self.ui.renderer._clear_sprite_display_cache()
+            return True
+        
+        return False
+    
+    def handle_sub_diamond_click(self, event):
+        """Handle mouse clicks for sub-diamond property editing"""
+        if not self.ui.renderer.sub_diamond_mode or not self.ui.model:
+            return False
+        
+        mouse_x, mouse_y = event.pos
+        drawing_area = pygame.Rect(self.LEFT_PANEL_WIDTH, 0, self.DRAWING_AREA_WIDTH, self.DRAWING_AREA_HEIGHT)
+        
+        if not drawing_area.collidepoint(mouse_x, mouse_y):
+            return False
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return False
+        
+        # Get the selected diamond data
+        diamond_data = None
+        if self.ui.renderer.selected_sub_diamond_layer == 'lower' and current_sprite.diamond_info.lower_diamond:
+            diamond_data = current_sprite.diamond_info.lower_diamond
+        elif self.ui.renderer.selected_sub_diamond_layer == 'upper' and current_sprite.diamond_info.upper_diamond:
+            diamond_data = current_sprite.diamond_info.upper_diamond
+        elif self.ui.renderer.selected_sub_diamond_layer in current_sprite.diamond_info.extra_diamonds:
+            diamond_data = current_sprite.diamond_info.extra_diamonds[self.ui.renderer.selected_sub_diamond_layer]
+        
+        if not diamond_data or not hasattr(diamond_data, 'sub_diamonds'):
+            return False
+        
+        # Convert mouse position to sprite coordinates
+        original_x, original_y = self._convert_mouse_to_sprite_coords(event.pos, current_sprite)
+        
+        # Find which sub-diamond the click is in
+        clicked_sub_diamond = self._find_sub_diamond_at_position(original_x, original_y, diamond_data.sub_diamonds)
+        
+        if clicked_sub_diamond:
+            direction, sub_diamond = clicked_sub_diamond
+            
+            # Handle the click based on editing mode
+            if self.ui.renderer.sub_diamond_editing_mode == 'walkability':
+                self._toggle_sub_diamond_walkability(sub_diamond, event.button, direction)
+            elif self.ui.renderer.sub_diamond_editing_mode == 'line_of_sight':
+                self._toggle_sub_diamond_line_of_sight(sub_diamond, event.button, direction)
+            
+            # Clear cache and update display
+            self.ui.renderer._clear_sprite_display_cache()
+            self.ui.update_sprite_info()
+            return True
+        
+        return False
+    
+    def _find_sub_diamond_at_position(self, x, y, sub_diamonds):
+        """Find which sub-diamond contains the given position"""
+        for direction, sub_diamond in sub_diamonds.items():
+            if self._point_in_sub_diamond(x, y, sub_diamond):
+                return (direction, sub_diamond)
+        return None
+    
+    def _point_in_sub_diamond(self, x, y, sub_diamond):
+        """Check if a point is inside a sub-diamond using simple bounds check"""
+        # Get sub-diamond bounds
+        vertices = [
+            (sub_diamond.north_vertex.x, sub_diamond.north_vertex.y),
+            (sub_diamond.south_vertex.x, sub_diamond.south_vertex.y),
+            (sub_diamond.east_vertex.x, sub_diamond.east_vertex.y),
+            (sub_diamond.west_vertex.x, sub_diamond.west_vertex.y)
+        ]
+        
+        # Simple bounding box check first
+        min_x = min(v[0] for v in vertices)
+        max_x = max(v[0] for v in vertices)
+        min_y = min(v[1] for v in vertices)
+        max_y = max(v[1] for v in vertices)
+        
+        return min_x <= x <= max_x and min_y <= y <= max_y
+    
+    def _toggle_sub_diamond_walkability(self, sub_diamond, mouse_button, direction):
+        """Toggle walkability property based on mouse button"""
+        if mouse_button == 1:  # Left click - toggle true/false
+            if sub_diamond.is_walkable is None:
+                sub_diamond.is_walkable = True
+            elif sub_diamond.is_walkable:
+                sub_diamond.is_walkable = False
+            else:
+                sub_diamond.is_walkable = True
+            print(f"Sub-diamond {direction} walkability: {sub_diamond.is_walkable}")
+        elif mouse_button == 3:  # Right click - set to None
+            sub_diamond.is_walkable = None
+            print(f"Sub-diamond {direction} walkability: None")
+    
+    def _toggle_sub_diamond_line_of_sight(self, sub_diamond, mouse_button, direction):
+        """Toggle line of sight properties based on mouse button"""
+        # For now, toggle a simple property. In the future, this could be more complex
+        # based on which edge the user clicked on
+        if mouse_button == 1:  # Left click - toggle true/false for all edges
+            current_value = getattr(sub_diamond.north_west_edge, 'blocks_line_of_sight', None)
+            new_value = not (current_value or False) if current_value is not None else True
+            self._set_all_edge_line_of_sight(sub_diamond, new_value)
+            print(f"Sub-diamond {direction} blocks line of sight (all edges): {new_value}")
+        elif mouse_button == 3:  # Right click - set to None for all edges
+            self._set_all_edge_line_of_sight(sub_diamond, None)
+            print(f"Sub-diamond {direction} blocks line of sight (all edges): None")
+    
+    def _set_all_edge_line_of_sight(self, sub_diamond, value):
+        """Set line of sight blocking for all edges of a sub-diamond"""
+        for edge_attr in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+            edge = getattr(sub_diamond, edge_attr, None)
+            if edge:
+                edge.blocks_line_of_sight = value
