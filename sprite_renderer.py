@@ -362,6 +362,17 @@ class SpriteRenderer:
                         )
                         pygame.draw.rect(surface, pixel_color[:3], pixel_rect)
         
+        # Calculate scaled bbox for both overlay and sub-diamonds (moved outside overlay check)
+        scaled_bbox = None
+        if current_sprite.bbox:
+            bbox = current_sprite.bbox
+            scaled_bbox = pygame.Rect(
+                bbox.x * model.pixeloid_multiplier,
+                bbox.y * model.pixeloid_multiplier,
+                bbox.width * model.pixeloid_multiplier,
+                bbox.height * model.pixeloid_multiplier
+            )
+        
         # Draw overlay if enabled
         if model.show_overlay:
             # Draw overlay pixel by pixel as pixeloids
@@ -390,16 +401,7 @@ class SpriteRenderer:
                             surface.blit(overlay_surface, overlay_rect)
             
             # Draw bounding box and analysis if sprite has analysis data
-            if current_sprite.bbox:
-                bbox = current_sprite.bbox
-                
-                # Scale bounding box coordinates using pixeloid multiplier
-                scaled_bbox = pygame.Rect(
-                    bbox.x * model.pixeloid_multiplier,
-                    bbox.y * model.pixeloid_multiplier,
-                    bbox.width * model.pixeloid_multiplier,
-                    bbox.height * model.pixeloid_multiplier
-                )
+            if scaled_bbox:
                 
                 # Draw original sprite boundary (blue lines)
                 original_width_scaled = sprite_rect.width * model.pixeloid_multiplier
@@ -476,9 +478,10 @@ class SpriteRenderer:
                 if current_sprite.detailed_analysis and self.show_raycast_analysis:
                     self._draw_analysis_points_to_surface(surface, sprite_x, sprite_y, scaled_bbox, current_sprite, model)
                 
-                # Draw sub-diamonds INDEPENDENTLY of raycast analysis
-                if self.show_sub_diamonds and current_sprite.diamond_info:
-                    self._draw_sub_diamonds(surface, sprite_x, sprite_y, scaled_bbox, current_sprite, model.pixeloid_multiplier, model)
+
+        # Draw sub-diamonds INDEPENDENTLY of overlay toggle and raycast analysis
+        if self.show_sub_diamonds and current_sprite.diamond_info and scaled_bbox:
+            self._draw_sub_diamonds(surface, sprite_x, sprite_y, scaled_bbox, current_sprite, model.pixeloid_multiplier, model)
 
     def _draw_analysis_points_to_surface(self, surface: pygame.Surface, sprite_x, sprite_y, scaled_bbox, current_sprite, model: Optional[SpritesheetModel]):
         """Draw analysis points to the cached surface"""
@@ -1203,8 +1206,8 @@ class SpriteRenderer:
             screen_y = sprite_y + scaled_bbox.y + rel_y * pixeloid_mult
             screen_vertices[vertex_name] = (screen_x, screen_y)
         
-        # Draw walkability surface if in walkability mode
-        if self.sub_diamond_editing_mode == 'walkability':
+        # Draw walkability surface if in surface mode
+        if self.sub_diamond_editing_mode == 'surface':
             self._draw_sub_diamond_surface(surface, screen_vertices, sub_diamond.is_walkable, pixeloid_mult)
         
         # Draw edges with properties
@@ -1273,10 +1276,12 @@ class SpriteRenderer:
                 continue
             
             # Determine color based on edge properties
-            if self.sub_diamond_editing_mode == 'line_of_sight':
+            if self.sub_diamond_editing_mode == 'edge_line_of_sight':
                 color = self._get_los_color(edge_props.blocks_line_of_sight)
-            else:  # walkability mode
+            elif self.sub_diamond_editing_mode == 'edge_movement':
                 color = self._get_movement_color(edge_props.blocks_movement)
+            else:  # surface mode - show combined view
+                color = self._get_combined_edge_color(edge_props.blocks_line_of_sight, edge_props.blocks_movement)
             
             # Get bbox-relative coordinates
             start_pos = bbox_rel_vertices[start_vertex]
