@@ -40,7 +40,7 @@ class SpriteRenderer:
         # Sub-diamond editing mode
         self.sub_diamond_mode = False
         self.selected_sub_diamond_layer = 'lower'  # 'lower', 'upper', or custom diamond name
-        self.sub_diamond_editing_mode = 'walkability'  # 'walkability' or 'line_of_sight'
+        self.sub_diamond_editing_mode = 'surface'  # 'surface', 'edge_line_of_sight', 'edge_movement'
         self.show_sub_diamonds = False  # Whether to visualize sub-diamonds
     
     def _clear_sprite_display_cache(self):

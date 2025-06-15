@@ -1696,28 +1696,36 @@ class InputHandlers:
             
             return True
         
-        # 1/2 keys for editing mode selection
+        # 1/2/3 keys for editing mode selection
         elif key == pygame.K_1:
-            self.ui.renderer.sub_diamond_editing_mode = 'line_of_sight'
+            self.ui.renderer.sub_diamond_editing_mode = 'surface'
             if not self.ui.renderer.sub_diamond_mode:
                 self.ui.renderer.sub_diamond_mode = True
                 self.ui.renderer.show_sub_diamonds = True
-            print(f"Sub-diamond editing mode: LINE OF SIGHT")
+            print(f"Sub-diamond editing mode: SURFACE (walkability)")
             self.ui.renderer._clear_sprite_display_cache()
             return True
         elif key == pygame.K_2:
-            self.ui.renderer.sub_diamond_editing_mode = 'walkability'
+            self.ui.renderer.sub_diamond_editing_mode = 'edge_line_of_sight'
             if not self.ui.renderer.sub_diamond_mode:
                 self.ui.renderer.sub_diamond_mode = True
                 self.ui.renderer.show_sub_diamonds = True
-            print(f"Sub-diamond editing mode: WALKABILITY")
+            print(f"Sub-diamond editing mode: EDGE LINE OF SIGHT")
+            self.ui.renderer._clear_sprite_display_cache()
+            return True
+        elif key == pygame.K_3:
+            self.ui.renderer.sub_diamond_editing_mode = 'edge_movement'
+            if not self.ui.renderer.sub_diamond_mode:
+                self.ui.renderer.sub_diamond_mode = True
+                self.ui.renderer.show_sub_diamonds = True
+            print(f"Sub-diamond editing mode: EDGE MOVEMENT")
             self.ui.renderer._clear_sprite_display_cache()
             return True
         
         return False
     
     def handle_sub_diamond_click(self, event):
-        """Handle mouse clicks for sub-diamond property editing"""
+        """Handle mouse clicks for sub-diamond property editing with proper pixeloid coordinate transformation"""
         if not self.ui.renderer.sub_diamond_mode or not self.ui.model:
             return False
         
@@ -1743,27 +1751,152 @@ class InputHandlers:
         if not diamond_data or not hasattr(diamond_data, 'sub_diamonds'):
             return False
         
-        # Convert mouse position to sprite coordinates
-        original_x, original_y = self._convert_mouse_to_sprite_coords(event.pos, current_sprite)
+        # Ensure sub-diamonds are initialized
+        diamond_data.ensure_sub_diamonds_initialized()
         
-        # Find which sub-diamond the click is in
-        clicked_sub_diamond = self._find_sub_diamond_at_position(original_x, original_y, diamond_data.sub_diamonds)
+        if not diamond_data.sub_diamonds:
+            return False
         
-        if clicked_sub_diamond:
-            direction, sub_diamond = clicked_sub_diamond
-            
-            # Handle the click based on editing mode
-            if self.ui.renderer.sub_diamond_editing_mode == 'walkability':
+        # Convert mouse position to sprite pixel coordinates using proper pixeloid transformation
+        sprite_pixel_x, sprite_pixel_y = self._convert_mouse_to_sprite_pixel_coords(event.pos, current_sprite)
+        
+        print(f"DEBUG SUB-DIAMOND CLICK: Mouse ({mouse_x}, {mouse_y}) -> Sprite pixel ({sprite_pixel_x:.1f}, {sprite_pixel_y:.1f})")
+        
+        # Handle click based on editing mode
+        if self.ui.renderer.sub_diamond_editing_mode == 'surface':
+            clicked_element = self._find_sub_diamond_surface_at_position(sprite_pixel_x, sprite_pixel_y, diamond_data.sub_diamonds)
+            if clicked_element:
+                direction, sub_diamond = clicked_element
                 self._toggle_sub_diamond_walkability(sub_diamond, event.button, direction)
-            elif self.ui.renderer.sub_diamond_editing_mode == 'line_of_sight':
-                self._toggle_sub_diamond_line_of_sight(sub_diamond, event.button, direction)
-            
-            # Clear cache and update display
-            self.ui.renderer._clear_sprite_display_cache()
-            self.ui.update_sprite_info()
-            return True
+                self.ui.renderer._clear_sprite_display_cache()
+                self.ui.update_sprite_info()
+                return True
+        
+        elif self.ui.renderer.sub_diamond_editing_mode in ['edge_line_of_sight', 'edge_movement']:
+            clicked_element = self._find_sub_diamond_edge_at_position(sprite_pixel_x, sprite_pixel_y, diamond_data.sub_diamonds)
+            if clicked_element:
+                edge_info = clicked_element
+                self._handle_edge_click(edge_info, event.button)
+                self.ui.renderer._clear_sprite_display_cache()
+                self.ui.update_sprite_info()
+                return True
         
         return False
+    
+    def _convert_mouse_to_sprite_pixel_coords(self, mouse_pos, current_sprite):
+        """Convert mouse position to sprite pixel coordinates using proper pixeloid transformation"""
+        mouse_x, mouse_y = mouse_pos
+        mouse_x_in_drawing = mouse_x - self.LEFT_PANEL_WIDTH
+        mouse_y_in_drawing = mouse_y
+        
+        # Calculate expanded bounds if diamond extends beyond bbox
+        expanded_bounds = self.ui.renderer._calculate_expanded_bounds(current_sprite, self.ui.model)
+        
+        sprite_rect = pygame.Rect(0, 0, current_sprite.original_size[0], current_sprite.original_size[1])
+        
+        if expanded_bounds and expanded_bounds['diamond_extends']:
+            # Use expanded bounds for positioning calculations
+            expanded_display_width = expanded_bounds['width'] * self.ui.model.pixeloid_multiplier
+            expanded_display_height = expanded_bounds['height'] * self.ui.model.pixeloid_multiplier
+            
+            # Center the expanded area
+            base_expanded_x = (self.DRAWING_AREA_WIDTH - expanded_display_width) // 2
+            base_expanded_y = (self.DRAWING_AREA_HEIGHT - expanded_display_height) // 2
+            
+            # Calculate sprite offset within expanded area
+            bbox_offset_x = (expanded_bounds['original_bbox'].x - expanded_bounds['x']) * self.ui.model.pixeloid_multiplier
+            bbox_offset_y = (expanded_bounds['original_bbox'].y - expanded_bounds['y']) * self.ui.model.pixeloid_multiplier
+            
+            sprite_x = base_expanded_x + bbox_offset_x + self.ui.model.pan_x
+            sprite_y = base_expanded_y + bbox_offset_y + self.ui.model.pan_y
+        else:
+            # Use original positioning logic
+            display_width = sprite_rect.width * self.ui.model.pixeloid_multiplier
+            display_height = sprite_rect.height * self.ui.model.pixeloid_multiplier
+            base_sprite_x = (self.DRAWING_AREA_WIDTH - display_width) // 2
+            base_sprite_y = (self.DRAWING_AREA_HEIGHT - display_height) // 2
+            sprite_x = base_sprite_x + self.ui.model.pan_x
+            sprite_y = base_sprite_y + self.ui.model.pan_y
+        
+        # Calculate which sprite pixel is under the mouse
+        sprite_pixel_x = (mouse_x_in_drawing - sprite_x) / self.ui.model.pixeloid_multiplier
+        sprite_pixel_y = (mouse_y_in_drawing - sprite_y) / self.ui.model.pixeloid_multiplier
+        
+        return sprite_pixel_x, sprite_pixel_y
+    
+    def _find_sub_diamond_surface_at_position(self, x, y, sub_diamonds):
+        """Find which sub-diamond surface contains the given position"""
+        for direction, sub_diamond in sub_diamonds.items():
+            if self._point_in_sub_diamond_surface(x, y, sub_diamond):
+                return (direction, sub_diamond)
+        return None
+    
+    def _find_sub_diamond_edge_at_position(self, x, y, sub_diamonds):
+        """Find which sub-diamond edge is closest to the given position"""
+        closest_edge = None
+        closest_distance = float('inf')
+        edge_detection_threshold = 3.0  # pixels
+        
+        for direction, sub_diamond in sub_diamonds.items():
+            # Check each edge of this sub-diamond
+            edges = [
+                ('north_west_edge', sub_diamond.north_vertex, sub_diamond.west_vertex),
+                ('north_east_edge', sub_diamond.north_vertex, sub_diamond.east_vertex),
+                ('south_west_edge', sub_diamond.south_vertex, sub_diamond.west_vertex),
+                ('south_east_edge', sub_diamond.south_vertex, sub_diamond.east_vertex)
+            ]
+            
+            for edge_name, start_vertex, end_vertex in edges:
+                distance = self._point_to_line_distance(x, y, start_vertex, end_vertex)
+                if distance < edge_detection_threshold and distance < closest_distance:
+                    closest_distance = distance
+                    edge_props = getattr(sub_diamond, edge_name, None)
+                    if edge_props:
+                        closest_edge = {
+                            'sub_diamond': sub_diamond,
+                            'direction': direction,
+                            'edge_name': edge_name,
+                            'edge_props': edge_props,
+                            'start_vertex': start_vertex,
+                            'end_vertex': end_vertex
+                        }
+        
+        return closest_edge
+    
+    def _handle_edge_click(self, edge_info, mouse_button):
+        """Handle click on a sub-diamond edge"""
+        edge_props = edge_info['edge_props']
+        direction = edge_info['direction']
+        edge_name = edge_info['edge_name']
+        
+        if self.ui.renderer.sub_diamond_editing_mode == 'edge_line_of_sight':
+            if mouse_button == 1:  # Left click - toggle true/false
+                if edge_props.blocks_line_of_sight is None:
+                    edge_props.blocks_line_of_sight = True
+                elif edge_props.blocks_line_of_sight:
+                    edge_props.blocks_line_of_sight = False
+                else:
+                    edge_props.blocks_line_of_sight = True
+                print(f"Sub-diamond {direction} {edge_name} blocks line of sight: {edge_props.blocks_line_of_sight}")
+            elif mouse_button == 3:  # Right click - set to None
+                edge_props.blocks_line_of_sight = None
+                print(f"Sub-diamond {direction} {edge_name} blocks line of sight: None")
+        
+        elif self.ui.renderer.sub_diamond_editing_mode == 'edge_movement':
+            if mouse_button == 1:  # Left click - toggle true/false
+                if edge_props.blocks_movement is None:
+                    edge_props.blocks_movement = True
+                elif edge_props.blocks_movement:
+                    edge_props.blocks_movement = False
+                else:
+                    edge_props.blocks_movement = True
+                print(f"Sub-diamond {direction} {edge_name} blocks movement: {edge_props.blocks_movement}")
+            elif mouse_button == 3:  # Right click - set to None
+                edge_props.blocks_movement = None
+                print(f"Sub-diamond {direction} {edge_name} blocks movement: None")
+        
+        # Handle shared edges - find adjacent sub-diamonds that share this edge
+        self._update_shared_edges(edge_info)
     
     def _find_sub_diamond_at_position(self, x, y, sub_diamonds):
         """Find which sub-diamond contains the given position"""
@@ -1771,6 +1904,128 @@ class InputHandlers:
             if self._point_in_sub_diamond(x, y, sub_diamond):
                 return (direction, sub_diamond)
         return None
+    
+    def _point_in_sub_diamond_surface(self, x, y, sub_diamond):
+        """Check if a point is inside a sub-diamond surface using proper diamond geometry"""
+        return self._point_in_diamond_shape(x, y,
+                                          sub_diamond.north_vertex, sub_diamond.south_vertex,
+                                          sub_diamond.east_vertex, sub_diamond.west_vertex)
+    
+    def _point_in_diamond_shape(self, x, y, north_vertex, south_vertex, east_vertex, west_vertex):
+        """Check if a point is inside a diamond shape using cross product method"""
+        # Convert vertices to float for precise calculations
+        n_x, n_y = float(north_vertex.x), float(north_vertex.y)
+        s_x, s_y = float(south_vertex.x), float(south_vertex.y)
+        e_x, e_y = float(east_vertex.x), float(east_vertex.y)
+        w_x, w_y = float(west_vertex.x), float(west_vertex.y)
+        
+        # Check if point is on the same side of each edge
+        def cross_product_sign(ax, ay, bx, by, px, py):
+            return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+        
+        # Check each edge of the diamond (clockwise order: N->E->S->W->N)
+        sign1 = cross_product_sign(n_x, n_y, e_x, e_y, x, y)  # North to East
+        sign2 = cross_product_sign(e_x, e_y, s_x, s_y, x, y)  # East to South
+        sign3 = cross_product_sign(s_x, s_y, w_x, w_y, x, y)  # South to West
+        sign4 = cross_product_sign(w_x, w_y, n_x, n_y, x, y)  # West to North
+        
+        # Point is inside if all cross products have the same sign (all positive or all negative)
+        return (sign1 >= 0 and sign2 >= 0 and sign3 >= 0 and sign4 >= 0) or \
+               (sign1 <= 0 and sign2 <= 0 and sign3 <= 0 and sign4 <= 0)
+    
+    def _point_to_line_distance(self, x, y, start_vertex, end_vertex):
+        """Calculate the shortest distance from a point to a line segment"""
+        x1, y1 = float(start_vertex.x), float(start_vertex.y)
+        x2, y2 = float(end_vertex.x), float(end_vertex.y)
+        px, py = float(x), float(y)
+        
+        # Vector from start to end
+        dx = x2 - x1
+        dy = y2 - y1
+        
+        # If the line segment is actually a point
+        if dx == 0 and dy == 0:
+            return ((px - x1) ** 2 + (py - y1) ** 2) ** 0.5
+        
+        # Calculate the parameter t for the closest point on the line
+        t = max(0, min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)))
+        
+        # Find the closest point on the line segment
+        closest_x = x1 + t * dx
+        closest_y = y1 + t * dy
+        
+        # Calculate distance to the closest point
+        return ((px - closest_x) ** 2 + (py - closest_y) ** 2) ** 0.5
+    
+    def _update_shared_edges(self, edge_info):
+        """Update shared edges between adjacent sub-diamonds"""
+        # Get the current sub-diamond and edge information
+        current_sub_diamond = edge_info['sub_diamond']
+        current_direction = edge_info['direction']
+        edge_name = edge_info['edge_name']
+        edge_props = edge_info['edge_props']
+        
+        # Find the parent diamond to access all sub-diamonds
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return
+        
+        # Get the selected diamond data
+        diamond_data = None
+        if self.ui.renderer.selected_sub_diamond_layer == 'lower' and current_sprite.diamond_info.lower_diamond:
+            diamond_data = current_sprite.diamond_info.lower_diamond
+        elif self.ui.renderer.selected_sub_diamond_layer == 'upper' and current_sprite.diamond_info.upper_diamond:
+            diamond_data = current_sprite.diamond_info.upper_diamond
+        elif self.ui.renderer.selected_sub_diamond_layer in current_sprite.diamond_info.extra_diamonds:
+            diamond_data = current_sprite.diamond_info.extra_diamonds[self.ui.renderer.selected_sub_diamond_layer]
+        
+        if not diamond_data or not diamond_data.sub_diamonds:
+            return
+        
+        # Define which edges are shared between adjacent sub-diamonds
+        # Based on the correct topology: N-W, N-E, S-W, S-E borders
+        shared_edge_mappings = {
+            # North and West share: N's south_west with W's north_east
+            ('north', 'south_west_edge'): ('west', 'north_east_edge'),
+            ('west', 'north_east_edge'): ('north', 'south_west_edge'),
+            
+            # North and East share: N's south_east with E's north_west
+            ('north', 'south_east_edge'): ('east', 'north_west_edge'),
+            ('east', 'north_west_edge'): ('north', 'south_east_edge'),
+            
+            # South and West share: S's north_west with W's south_east
+            ('south', 'north_west_edge'): ('west', 'south_east_edge'),
+            ('west', 'south_east_edge'): ('south', 'north_west_edge'),
+            
+            # South and East share: S's north_east with E's south_west
+            ('south', 'north_east_edge'): ('east', 'south_west_edge'),
+            ('east', 'south_west_edge'): ('south', 'north_east_edge'),
+        }
+        
+        # Find the corresponding shared edge
+        key = (current_direction, edge_name)
+        if key in shared_edge_mappings:
+            target_direction, target_edge_name = shared_edge_mappings[key]
+            
+            # Check if the target sub-diamond exists
+            if target_direction in diamond_data.sub_diamonds:
+                target_sub_diamond = diamond_data.sub_diamonds[target_direction]
+                target_edge_props = getattr(target_sub_diamond, target_edge_name, None)
+                
+                if target_edge_props:
+                    # Copy the properties to the shared edge
+                    target_edge_props.blocks_line_of_sight = edge_props.blocks_line_of_sight
+                    target_edge_props.blocks_movement = edge_props.blocks_movement
+                    
+                    print(f"Updated shared edge: {target_direction} {target_edge_name} = {current_direction} {edge_name}")
+                    print(f"  Line of sight: {edge_props.blocks_line_of_sight}")
+                    print(f"  Movement: {edge_props.blocks_movement}")
+                else:
+                    print(f"ERROR: Could not find target edge {target_direction}.{target_edge_name}")
+            else:
+                print(f"ERROR: Target sub-diamond {target_direction} not found")
+        else:
+            print(f"No shared edge mapping found for {current_direction}.{edge_name}")
     
     def _point_in_sub_diamond(self, x, y, sub_diamond):
         """Check if a point is inside a sub-diamond using simple bounds check"""
@@ -1799,15 +2054,13 @@ class InputHandlers:
                 sub_diamond.is_walkable = False
             else:
                 sub_diamond.is_walkable = True
-            print(f"Sub-diamond {direction} walkability: {sub_diamond.is_walkable}")
+            print(f"Sub-diamond {direction} surface walkability: {sub_diamond.is_walkable}")
         elif mouse_button == 3:  # Right click - set to None
             sub_diamond.is_walkable = None
-            print(f"Sub-diamond {direction} walkability: None")
+            print(f"Sub-diamond {direction} surface walkability: None")
     
     def _toggle_sub_diamond_line_of_sight(self, sub_diamond, mouse_button, direction):
-        """Toggle line of sight properties based on mouse button"""
-        # For now, toggle a simple property. In the future, this could be more complex
-        # based on which edge the user clicked on
+        """Legacy method - Toggle line of sight properties for all edges"""
         if mouse_button == 1:  # Left click - toggle true/false for all edges
             current_value = getattr(sub_diamond.north_west_edge, 'blocks_line_of_sight', None)
             new_value = not (current_value or False) if current_value is not None else True
