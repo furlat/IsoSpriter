@@ -72,6 +72,14 @@ class FileOperationsPanel:
         )
         current_y += 45
         
+        # Asset type button (applies to all sprites in sheet)
+        self.components['asset_type_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 30),
+            text='Set Asset Type: TILE',
+            manager=self.manager
+        )
+        current_y += 40
+        
         self.height = current_y - self.start_y
 
 

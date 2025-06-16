@@ -37,6 +37,8 @@ class InputHandlers:
             self.handle_prev_sprite()
         elif event.ui_element == ui_elements['navigation_next_button']:
             self.handle_next_sprite()
+        elif event.ui_element == ui_elements['file_ops_asset_type_button']:
+            self.handle_set_asset_type()
         elif event.ui_element == ui_elements['analysis_overlay_button']:
             self.handle_toggle_overlay()
         elif event.ui_element == ui_elements['analysis_diamond_height_button']:
@@ -269,6 +271,111 @@ class InputHandlers:
             # Clear cache since upper lines mode affects rendering
             self.ui.renderer._clear_sprite_display_cache()
             self.ui.update_sprite_info()
+    
+    def handle_set_asset_type(self):
+        """Handle asset type selection with dialog - applies to ALL sprites in the sheet"""
+        if not self.ui.model:
+            return
+        
+        from spritesheet_model import AssetType
+        
+        # Show dialog to select asset type
+        selected_asset_type = self._show_asset_type_dialog()
+        if not selected_asset_type:
+            return
+        
+        # Apply to ALL sprites in the sheet
+        sprites_updated = 0
+        for sprite in self.ui.model.sprites:
+            sprite.asset_type = selected_asset_type
+            sprites_updated += 1
+        
+        # Update button text
+        self.ui.file_ops_panel.components['asset_type_button'].set_text(
+            f'Set Asset Type: {selected_asset_type.value.upper()}'
+        )
+        
+        print(f"Asset type '{selected_asset_type.value.upper()}' applied to all {sprites_updated} sprites in the sheet")
+    
+    def _show_asset_type_dialog(self):
+        """Show dialog to select asset type from the 4 available choices"""
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            from spritesheet_model import AssetType
+            
+            # Create selection dialog
+            root = tk.Tk()
+            root.title("Set Asset Type for All Sprites")
+            root.geometry("350x250")
+            
+            # Center the window
+            root.eval('tk::PlaceWindow . center')
+            
+            selected_asset_type = None
+            
+            def on_select(asset_type):
+                nonlocal selected_asset_type
+                selected_asset_type = asset_type
+                root.destroy()
+            
+            def on_cancel():
+                root.destroy()
+            
+            # Get current asset type for display
+            current_asset_type = AssetType.TILE  # Default
+            if self.ui.model and len(self.ui.model.sprites) > 0:
+                current_asset_type = self.ui.model.sprites[0].asset_type
+            
+            # Create UI elements
+            tk.Label(root, text="Select Asset Type for All Sprites:", font=("Arial", 12, "bold")).pack(pady=15)
+            tk.Label(root, text=f"Current: {current_asset_type.value.upper()}", font=("Arial", 10), fg="blue").pack(pady=5)
+            
+            # Asset type buttons
+            button_frame = tk.Frame(root)
+            button_frame.pack(pady=20)
+            
+            asset_types = [
+                (AssetType.TILE, "TILE", "Standard isometric blocks"),
+                (AssetType.WALL, "WALL", "Vertical wall segments"),
+                (AssetType.DOOR, "DOOR", "Interactive door elements"),
+                (AssetType.STAIR, "STAIR", "Step/stair elements")
+            ]
+            
+            for i, (asset_type, name, description) in enumerate(asset_types):
+                row = i // 2
+                col = i % 2
+                
+                btn_frame = tk.Frame(button_frame)
+                btn_frame.grid(row=row, column=col, padx=10, pady=5, sticky="ew")
+                
+                btn = tk.Button(
+                    btn_frame,
+                    text=name,
+                    font=("Arial", 11, "bold"),
+                    width=12,
+                    height=2,
+                    command=lambda at=asset_type: on_select(at)
+                )
+                btn.pack()
+                
+                # Add description label
+                tk.Label(btn_frame, text=description, font=("Arial", 8), fg="gray").pack()
+            
+            # Configure grid weights
+            button_frame.columnconfigure(0, weight=1)
+            button_frame.columnconfigure(1, weight=1)
+            
+            # Cancel button
+            tk.Button(root, text="Cancel", command=on_cancel, font=("Arial", 10)).pack(pady=10)
+            
+            root.mainloop()
+            
+            return selected_asset_type
+                
+        except Exception as e:
+            print(f"Error showing asset type dialog: {e}")
+            return None
     
     def handle_toggle_diamond_vertices(self):
         """Handle diamond vertices toggle"""
