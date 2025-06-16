@@ -63,6 +63,16 @@ class InputHandlers:
             self.handle_reset_view()
         elif event.ui_element == ui_elements['view_center_view_button']:
             self.handle_center_view()
+        elif event.ui_element == ui_elements['sub_diamond_set_default_button']:
+            self.handle_sub_diamond_set_default()
+        elif event.ui_element == ui_elements['sub_diamond_clear_all_button']:
+            self.handle_sub_diamond_clear_all()
+        elif event.ui_element == ui_elements['sub_diamond_set_all_true_button']:
+            self.handle_sub_diamond_set_all_true()
+        elif event.ui_element == ui_elements['sub_diamond_set_all_false_button']:
+            self.handle_sub_diamond_set_all_false()
+        elif event.ui_element == ui_elements['sub_diamond_propagate_rotation_button']:
+            self.handle_propagate_rotation()
     
     def handle_slider_move(self, event, ui_elements):
         """Handle slider movement events"""
@@ -482,6 +492,9 @@ class InputHandlers:
             # Update manual vertices with completed diamond
             self.ui.renderer.manual_vertices[sprite_key][selected_diamond].update(completed_diamond)
             print(f"Completed {selected_diamond} diamond: {completed_diamond}")
+            
+            # Check if this creates a complete custom diamond and sync to model
+            self._sync_complete_custom_diamond_to_model(sprite_key, selected_diamond)
         else:
             print(f"Need at least 1 vertex to auto-populate {selected_diamond} diamond")
         
@@ -1082,6 +1095,9 @@ class InputHandlers:
               f"[sprite pixel: ({sprite_pixel_x:.1f}, {sprite_pixel_y:.1f})]")
         print(f"DEBUG STORAGE: manual_vertices after positioning = {self.ui.renderer.manual_vertices}")
         
+        # Check if this completes a custom diamond and sync to model
+        self._sync_complete_custom_diamond_to_model(sprite_key, self.ui.renderer.selected_diamond)
+        
         # Clear cache to trigger re-render with new vertex position
         self.ui.renderer._clear_sprite_display_cache()
         
@@ -1642,6 +1658,151 @@ class InputHandlers:
             print(f"Error showing diamond name dialog: {e}")
             return None
     
+    def _sync_complete_custom_diamond_to_model(self, sprite_key: int, diamond_name: str):
+        """Sync a complete diamond from manual vertices to the model (works for lower, upper, and custom diamonds)"""
+        # Check if we have manual vertices for this diamond
+        manual_data = self.ui.renderer.manual_vertices.get(sprite_key, {})
+        diamond_vertices = manual_data.get(diamond_name, {})
+        
+        # Check if the diamond is complete (has all 4 vertices)
+        required_vertices = ['north', 'south', 'east', 'west']
+        if not all(vertex in diamond_vertices for vertex in required_vertices):
+            print(f"Diamond '{diamond_name}' is not complete yet ({len(diamond_vertices)}/4 vertices)")
+            return
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite:
+            return
+        
+        # Ensure diamond_info exists
+        if not current_sprite.diamond_info:
+            print(f"No diamond_info available for sprite {sprite_key}")
+            return
+        
+        from spritesheet_model import Point, GameplayDiamondData
+        
+        # Helper function to update diamond vertices and recalculate derived properties
+        def update_diamond_vertices(diamond_data):
+            diamond_data.north_vertex = Point(x=diamond_vertices['north'][0], y=diamond_vertices['north'][1])
+            diamond_data.south_vertex = Point(x=diamond_vertices['south'][0], y=diamond_vertices['south'][1])
+            diamond_data.east_vertex = Point(x=diamond_vertices['east'][0], y=diamond_vertices['east'][1])
+            diamond_data.west_vertex = Point(x=diamond_vertices['west'][0], y=diamond_vertices['west'][1])
+            
+            # Recalculate center
+            diamond_data.center = Point(
+                x=(diamond_data.north_vertex.x + diamond_data.south_vertex.x) // 2,
+                y=(diamond_data.north_vertex.y + diamond_data.south_vertex.y) // 2
+            )
+            
+            # Recalculate midpoints
+            diamond_data.north_east_midpoint = Point(
+                x=(diamond_data.north_vertex.x + diamond_data.east_vertex.x) // 2,
+                y=(diamond_data.north_vertex.y + diamond_data.east_vertex.y) // 2
+            )
+            diamond_data.east_south_midpoint = Point(
+                x=(diamond_data.east_vertex.x + diamond_data.south_vertex.x) // 2,
+                y=(diamond_data.east_vertex.y + diamond_data.south_vertex.y) // 2
+            )
+            diamond_data.south_west_midpoint = Point(
+                x=(diamond_data.south_vertex.x + diamond_data.west_vertex.x) // 2,
+                y=(diamond_data.south_vertex.y + diamond_data.west_vertex.y) // 2
+            )
+            diamond_data.west_north_midpoint = Point(
+                x=(diamond_data.west_vertex.x + diamond_data.north_vertex.x) // 2,
+                y=(diamond_data.west_vertex.y + diamond_data.north_vertex.y) // 2
+            )
+            
+            # Force recalculation of sub-diamonds with new vertex positions
+            # Clear existing sub-diamonds first to force recalculation
+            diamond_data.sub_diamonds = {}
+            diamond_data.ensure_sub_diamonds_initialized()
+        
+        # Handle lower diamond
+        if diamond_name == 'lower':
+            if current_sprite.diamond_info.lower_diamond:
+                print(f"Updating lower diamond vertices from manual input")
+                update_diamond_vertices(current_sprite.diamond_info.lower_diamond)
+                
+                # Update z_offset (lower diamond always has z_offset = 0)
+                current_sprite.diamond_info.lower_diamond.z_offset = 0.0
+                print(f"Lower diamond updated and ready for sub-diamond mode")
+            else:
+                print(f"No lower diamond exists in model to update")
+                
+        # Handle upper diamond
+        elif diamond_name == 'upper':
+            if current_sprite.diamond_info.upper_diamond:
+                print(f"Updating upper diamond vertices from manual input")
+                update_diamond_vertices(current_sprite.diamond_info.upper_diamond)
+                
+                # Recalculate z_offset relative to lower diamond
+                if current_sprite.diamond_info.lower_diamond:
+                    lower_north_y = current_sprite.diamond_info.lower_diamond.north_vertex.y
+                    upper_z_offset = float(lower_north_y - diamond_vertices['north'][1])
+                    current_sprite.diamond_info.upper_diamond.z_offset = upper_z_offset
+                    print(f"Upper diamond updated with z_offset {upper_z_offset} and ready for sub-diamond mode")
+                else:
+                    current_sprite.diamond_info.upper_diamond.z_offset = 0.0
+                    print(f"Upper diamond updated (no lower diamond for z_offset calculation)")
+            else:
+                print(f"No upper diamond exists in model to update")
+                
+        # Handle custom diamonds
+        else:
+            if diamond_name in current_sprite.diamond_info.extra_diamonds:
+                print(f"Updating custom diamond '{diamond_name}' vertices from manual input")
+                update_diamond_vertices(current_sprite.diamond_info.extra_diamonds[diamond_name])
+                
+                # Recalculate z_offset relative to lower diamond
+                if current_sprite.diamond_info.lower_diamond:
+                    lower_north_y = current_sprite.diamond_info.lower_diamond.north_vertex.y
+                    custom_z_offset = float(lower_north_y - diamond_vertices['north'][1])
+                    current_sprite.diamond_info.extra_diamonds[diamond_name].z_offset = custom_z_offset
+                    print(f"Custom diamond '{diamond_name}' updated with z_offset {custom_z_offset} and ready for sub-diamond mode")
+                else:
+                    current_sprite.diamond_info.extra_diamonds[diamond_name].z_offset = 0.0
+                    print(f"Custom diamond '{diamond_name}' updated (no lower diamond for z_offset calculation)")
+            else:
+                # Create new custom diamond in the model
+                print(f"Creating new custom diamond '{diamond_name}' in model from complete manual vertices")
+                
+                # Calculate z_offset relative to lower diamond
+                lower_north_y = current_sprite.diamond_info.lower_diamond.north_vertex.y if current_sprite.diamond_info.lower_diamond else 0
+                custom_z_offset = float(lower_north_y - diamond_vertices['north'][1])
+                
+                # Create the new diamond
+                new_diamond = GameplayDiamondData(
+                    north_vertex=Point(x=diamond_vertices['north'][0], y=diamond_vertices['north'][1]),
+                    south_vertex=Point(x=diamond_vertices['south'][0], y=diamond_vertices['south'][1]),
+                    east_vertex=Point(x=diamond_vertices['east'][0], y=diamond_vertices['east'][1]),
+                    west_vertex=Point(x=diamond_vertices['west'][0], y=diamond_vertices['west'][1]),
+                    center=Point(
+                        x=(diamond_vertices['north'][0] + diamond_vertices['south'][0]) // 2,
+                        y=(diamond_vertices['north'][1] + diamond_vertices['south'][1]) // 2
+                    ),
+                    z_offset=custom_z_offset
+                )
+                
+                # Use the helper function to set midpoints and initialize sub-diamonds
+                update_diamond_vertices(new_diamond)
+                
+                # Add to model
+                current_sprite.diamond_info.extra_diamonds[diamond_name] = new_diamond
+                
+                # Update renderer's custom diamonds list
+                self._update_custom_diamonds_list()
+                
+                print(f"Custom diamond '{diamond_name}' created in model with z_offset {custom_z_offset}")
+                print(f"Diamond is now available for sub-diamond mode and other features")
+        
+        # Recalculate diamonds_z_offset if both lower and upper diamonds exist
+        if (current_sprite.diamond_info.lower_diamond and
+            current_sprite.diamond_info.upper_diamond):
+            lower_north_y = current_sprite.diamond_info.lower_diamond.north_vertex.y
+            upper_north_y = current_sprite.diamond_info.upper_diamond.north_vertex.y
+            current_sprite.diamond_info.diamonds_z_offset = float(lower_north_y - upper_north_y)
+            print(f"Recalculated diamonds_z_offset: {current_sprite.diamond_info.diamonds_z_offset}")
+    
     def handle_sub_diamond_keys(self, key):
         """Handle keyboard input for sub-diamond editing mode"""
         
@@ -1721,6 +1882,14 @@ class InputHandlers:
             print(f"Sub-diamond editing mode: EDGE MOVEMENT")
             self.ui.renderer._clear_sprite_display_cache()
             return True
+        elif key == pygame.K_4:
+            self.ui.renderer.sub_diamond_editing_mode = 'z_portal'
+            if not self.ui.renderer.sub_diamond_mode:
+                self.ui.renderer.sub_diamond_mode = True
+                self.ui.renderer.show_sub_diamonds = True
+            print(f"Sub-diamond editing mode: Z-PORTAL")
+            self.ui.renderer._clear_sprite_display_cache()
+            return True
         
         return False
     
@@ -1772,11 +1941,14 @@ class InputHandlers:
                 self.ui.update_sprite_info()
                 return True
         
-        elif self.ui.renderer.sub_diamond_editing_mode in ['edge_line_of_sight', 'edge_movement']:
+        elif self.ui.renderer.sub_diamond_editing_mode in ['edge_line_of_sight', 'edge_movement', 'z_portal']:
             clicked_element = self._find_sub_diamond_edge_at_position(sprite_pixel_x, sprite_pixel_y, diamond_data.sub_diamonds)
             if clicked_element:
                 edge_info = clicked_element
-                self._handle_edge_click(edge_info, event.button)
+                if self.ui.renderer.sub_diamond_editing_mode == 'z_portal':
+                    self._handle_z_portal_click(edge_info, event.button)
+                else:
+                    self._handle_edge_click(edge_info, event.button)
                 self.ui.renderer._clear_sprite_display_cache()
                 self.ui.update_sprite_info()
                 return True
@@ -2076,3 +2248,854 @@ class InputHandlers:
             edge = getattr(sub_diamond, edge_attr, None)
             if edge:
                 edge.blocks_line_of_sight = value
+    
+    def handle_sub_diamond_set_default(self):
+        """Set default sub-diamond properties based on diamond layer: Upper=allow all, Lower=block all"""
+        if not self.ui.model or not self.ui.renderer.sub_diamond_mode:
+            print("Sub-diamond mode must be active to set defaults")
+            return
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return
+        
+        # Get the selected diamond data
+        diamond_data = None
+        layer_name = self.ui.renderer.selected_sub_diamond_layer
+        if layer_name == 'lower' and current_sprite.diamond_info.lower_diamond:
+            diamond_data = current_sprite.diamond_info.lower_diamond
+        elif layer_name == 'upper' and current_sprite.diamond_info.upper_diamond:
+            diamond_data = current_sprite.diamond_info.upper_diamond
+        elif layer_name in current_sprite.diamond_info.extra_diamonds:
+            diamond_data = current_sprite.diamond_info.extra_diamonds[layer_name]
+        
+        if not diamond_data or not hasattr(diamond_data, 'sub_diamonds'):
+            return
+        
+        # Ensure sub-diamonds are initialized
+        diamond_data.ensure_sub_diamonds_initialized()
+        
+        if not diamond_data.sub_diamonds:
+            return
+        
+        print(f"\n=== SETTING DEFAULT SUB-DIAMOND PROPERTIES FOR {layer_name.upper()} LAYER ===")
+        
+        # Determine default values based on diamond layer
+        if layer_name == 'upper':
+            # Upper diamond: all quadrants walkable, all edges allow passage
+            default_walkable = True
+            default_blocking = False
+            print("Upper diamond defaults: ALL QUADRANTS WALKABLE, ALL EDGES ALLOW")
+        else:
+            # Lower diamond (and custom diamonds): all quadrants not walkable, all edges block
+            default_walkable = False
+            default_blocking = True
+            print("Lower diamond defaults: ALL QUADRANTS NOT WALKABLE, ALL EDGES BLOCK")
+        
+        # Set properties for all quadrants
+        for direction, sub_diamond in diamond_data.sub_diamonds.items():
+            # Set walkability
+            sub_diamond.is_walkable = default_walkable
+            
+            # Set all edge properties for this sub-diamond
+            for edge_attr in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+                edge = getattr(sub_diamond, edge_attr, None)
+                if edge:
+                    edge.blocks_line_of_sight = default_blocking
+                    edge.blocks_movement = default_blocking
+            
+            print(f"{direction.title()} quadrant: {'WALKABLE' if default_walkable else 'NOT WALKABLE'}, {'ALLOWS ALL' if not default_blocking else 'BLOCKS ALL'}")
+        
+        # Update shared edges to maintain consistency
+        self._update_all_shared_edges(diamond_data.sub_diamonds)
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self.ui.update_sprite_info()
+        
+        print("Default sub-diamond properties applied successfully")
+    
+    def handle_sub_diamond_clear_all(self):
+        """Clear all sub-diamond properties to None (unset state)"""
+        if not self.ui.model or not self.ui.renderer.sub_diamond_mode:
+            print("Sub-diamond mode must be active to clear properties")
+            return
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return
+        
+        # Get the selected diamond data
+        diamond_data = None
+        layer_name = self.ui.renderer.selected_sub_diamond_layer
+        if layer_name == 'lower' and current_sprite.diamond_info.lower_diamond:
+            diamond_data = current_sprite.diamond_info.lower_diamond
+        elif layer_name == 'upper' and current_sprite.diamond_info.upper_diamond:
+            diamond_data = current_sprite.diamond_info.upper_diamond
+        elif layer_name in current_sprite.diamond_info.extra_diamonds:
+            diamond_data = current_sprite.diamond_info.extra_diamonds[layer_name]
+        
+        if not diamond_data or not hasattr(diamond_data, 'sub_diamonds'):
+            return
+        
+        # Ensure sub-diamonds are initialized
+        diamond_data.ensure_sub_diamonds_initialized()
+        
+        if not diamond_data.sub_diamonds:
+            return
+        
+        print(f"\n=== CLEARING ALL SUB-DIAMOND PROPERTIES FOR {layer_name.upper()} LAYER ===")
+        
+        # Clear properties for each quadrant
+        for direction, sub_diamond in diamond_data.sub_diamonds.items():
+            # Clear walkability
+            sub_diamond.is_walkable = None
+            
+            # Clear all edge properties for this sub-diamond
+            for edge_attr in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+                edge = getattr(sub_diamond, edge_attr, None)
+                if edge:
+                    edge.blocks_line_of_sight = None
+                    edge.blocks_movement = None
+            
+            print(f"{direction.title()} quadrant: ALL PROPERTIES CLEARED")
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self.ui.update_sprite_info()
+        
+        print("All sub-diamond properties cleared successfully")
+    
+    def _update_all_shared_edges(self, sub_diamonds):
+        """Update all shared edges to maintain consistency between adjacent sub-diamonds"""
+        # Define which edges are shared between adjacent sub-diamonds
+        shared_edge_mappings = {
+            # North and West share: N's south_west with W's north_east
+            ('north', 'south_west_edge'): ('west', 'north_east_edge'),
+            ('west', 'north_east_edge'): ('north', 'south_west_edge'),
+            
+            # North and East share: N's south_east with E's north_west
+            ('north', 'south_east_edge'): ('east', 'north_west_edge'),
+            ('east', 'north_west_edge'): ('north', 'south_east_edge'),
+            
+            # South and West share: S's north_west with W's south_east
+            ('south', 'north_west_edge'): ('west', 'south_east_edge'),
+            ('west', 'south_east_edge'): ('south', 'north_west_edge'),
+            
+            # South and East share: S's north_east with E's south_west
+            ('south', 'north_east_edge'): ('east', 'south_west_edge'),
+            ('east', 'south_west_edge'): ('south', 'north_east_edge'),
+        }
+        
+        # Process each mapping to synchronize shared edges
+        processed_pairs = set()
+        
+        for (source_direction, source_edge_name), (target_direction, target_edge_name) in shared_edge_mappings.items():
+            # Avoid processing the same pair twice
+            pair_key = tuple(sorted([(source_direction, source_edge_name), (target_direction, target_edge_name)]))
+            if pair_key in processed_pairs:
+                continue
+            processed_pairs.add(pair_key)
+            
+            # Check if both sub-diamonds exist
+            if source_direction in sub_diamonds and target_direction in sub_diamonds:
+                source_sub = sub_diamonds[source_direction]
+                target_sub = sub_diamonds[target_direction]
+                
+                source_edge = getattr(source_sub, source_edge_name, None)
+                target_edge = getattr(target_sub, target_edge_name, None)
+                
+                if source_edge and target_edge:
+                    # Synchronize properties (use source as reference)
+                    target_edge.blocks_line_of_sight = source_edge.blocks_line_of_sight
+                    target_edge.blocks_movement = source_edge.blocks_movement
+    
+    def handle_sub_diamond_set_all_true(self):
+        """Set all sub-diamond properties to True (block everything)"""
+        if not self.ui.model or not self.ui.renderer.sub_diamond_mode:
+            print("Sub-diamond mode must be active to set all properties")
+            return
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return
+        
+        # Get the selected diamond data
+        diamond_data = None
+        layer_name = self.ui.renderer.selected_sub_diamond_layer
+        if layer_name == 'lower' and current_sprite.diamond_info.lower_diamond:
+            diamond_data = current_sprite.diamond_info.lower_diamond
+        elif layer_name == 'upper' and current_sprite.diamond_info.upper_diamond:
+            diamond_data = current_sprite.diamond_info.upper_diamond
+        elif layer_name in current_sprite.diamond_info.extra_diamonds:
+            diamond_data = current_sprite.diamond_info.extra_diamonds[layer_name]
+        
+        if not diamond_data or not hasattr(diamond_data, 'sub_diamonds'):
+            return
+        
+        # Ensure sub-diamonds are initialized
+        diamond_data.ensure_sub_diamonds_initialized()
+        
+        if not diamond_data.sub_diamonds:
+            return
+        
+        print(f"\n=== SETTING ALL PROPERTIES TO BLOCK FOR {layer_name.upper()} LAYER ===")
+        
+        # Set all properties to True (blocking) for all quadrants
+        for direction, sub_diamond in diamond_data.sub_diamonds.items():
+            # Set walkability to False (not walkable)
+            sub_diamond.is_walkable = False
+            
+            # Set all edge properties to True (blocking)
+            for edge_attr in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+                edge = getattr(sub_diamond, edge_attr, None)
+                if edge:
+                    edge.blocks_line_of_sight = True
+                    edge.blocks_movement = True
+            
+            print(f"{direction.title()} quadrant: NOT WALKABLE, BLOCKS ALL")
+        
+        # Update shared edges to maintain consistency
+        self._update_all_shared_edges(diamond_data.sub_diamonds)
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self.ui.update_sprite_info()
+        
+        print("All properties set to block successfully")
+    
+    def handle_sub_diamond_set_all_false(self):
+        """Set all sub-diamond properties to False (allow everything)"""
+        if not self.ui.model or not self.ui.renderer.sub_diamond_mode:
+            print("Sub-diamond mode must be active to set all properties")
+            return
+        
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return
+        
+        # Get the selected diamond data
+        diamond_data = None
+        layer_name = self.ui.renderer.selected_sub_diamond_layer
+        if layer_name == 'lower' and current_sprite.diamond_info.lower_diamond:
+            diamond_data = current_sprite.diamond_info.lower_diamond
+        elif layer_name == 'upper' and current_sprite.diamond_info.upper_diamond:
+            diamond_data = current_sprite.diamond_info.upper_diamond
+        elif layer_name in current_sprite.diamond_info.extra_diamonds:
+            diamond_data = current_sprite.diamond_info.extra_diamonds[layer_name]
+        
+        if not diamond_data or not hasattr(diamond_data, 'sub_diamonds'):
+            return
+        
+        # Ensure sub-diamonds are initialized
+        diamond_data.ensure_sub_diamonds_initialized()
+        
+        if not diamond_data.sub_diamonds:
+            return
+        
+        print(f"\n=== SETTING ALL PROPERTIES TO ALLOW FOR {layer_name.upper()} LAYER ===")
+        
+        # Set all properties to False (allowing) for all quadrants
+        for direction, sub_diamond in diamond_data.sub_diamonds.items():
+            # Set walkability to True (walkable)
+            sub_diamond.is_walkable = True
+            
+            # Set all edge properties to False (allowing)
+            for edge_attr in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+                edge = getattr(sub_diamond, edge_attr, None)
+                if edge:
+                    edge.blocks_line_of_sight = False
+                    edge.blocks_movement = False
+            
+            print(f"{direction.title()} quadrant: WALKABLE, ALLOWS ALL")
+        
+        # Update shared edges to maintain consistency
+        self._update_all_shared_edges(diamond_data.sub_diamonds)
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self.ui.update_sprite_info()
+        
+        print("All properties set to allow successfully")
+    
+    def _handle_z_portal_click(self, edge_info, mouse_button):
+        """Handle click on a sub-diamond edge for z-portal editing"""
+        edge_props = edge_info['edge_props']
+        direction = edge_info['direction']
+        edge_name = edge_info['edge_name']
+        
+        if mouse_button == 1:  # Left click - set or modify z-portal
+            if edge_props.z_portal is None:
+                # Create new z-portal - show dialog to select target elevation
+                target_elevation = self._show_z_portal_dialog(direction, edge_name)
+                if target_elevation is not None:
+                    edge_props.z_portal = target_elevation
+                    print(f"Created z-portal on {direction} {edge_name} -> elevation {target_elevation}")
+                    
+                    # Create bi-directional portal on target diamond if possible
+                    self._create_bidirectional_portal(edge_info, target_elevation)
+                else:
+                    print("Z-portal creation cancelled")
+            else:
+                # Modify existing z-portal
+                current_elevation = edge_props.z_portal
+                target_elevation = self._show_z_portal_dialog(direction, edge_name, current_elevation)
+                if target_elevation is not None:
+                    edge_props.z_portal = target_elevation
+                    print(f"Modified z-portal on {direction} {edge_name} -> elevation {target_elevation}")
+                    
+                    # Update bi-directional portal
+                    self._create_bidirectional_portal(edge_info, target_elevation)
+                else:
+                    print("Z-portal modification cancelled")
+                    
+        elif mouse_button == 3:  # Right click - remove z-portal
+            if edge_props.z_portal is not None:
+                old_elevation = edge_props.z_portal
+                edge_props.z_portal = None
+                print(f"Removed z-portal from {direction} {edge_name} (was -> elevation {old_elevation})")
+                
+                # Remove bi-directional portal if it exists
+                self._remove_bidirectional_portal(edge_info, old_elevation)
+            else:
+                print(f"No z-portal to remove from {direction} {edge_name}")
+        
+        # Handle shared edges - find adjacent sub-diamonds that share this edge
+        self._update_shared_edges(edge_info)
+    
+    def _show_z_portal_dialog(self, direction, edge_name, current_elevation=None):
+        """Show dialog to select target diamond for z-portal"""
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            
+            # Get available target diamonds
+            current_sprite = self.ui.model.get_current_sprite()
+            if not current_sprite or not current_sprite.diamond_info:
+                print("No diamond data available for portal creation")
+                return None
+            
+            diamond_info = current_sprite.diamond_info
+            available_diamonds = []
+            
+            # Get the lower diamond's north vertex Y coordinate for z_offset calculation
+            # (same logic as in spritesheet_model.py _export_single_diamond)
+            lower_north_y = diamond_info.lower_diamond.north_vertex.y if diamond_info.lower_diamond else 0
+            
+            # Add lower diamond
+            if diamond_info.lower_diamond:
+                # Lower diamond always has calculated z_offset = 0.0
+                calculated_z_offset = 0.0
+                available_diamonds.append(("Lower Diamond", "lower", calculated_z_offset))
+            
+            # Add upper diamond
+            if diamond_info.upper_diamond:
+                # Upper diamond z_offset = lower_north_y - upper_north_y
+                calculated_z_offset = float(lower_north_y - diamond_info.upper_diamond.north_vertex.y)
+                available_diamonds.append(("Upper Diamond", "upper", calculated_z_offset))
+            
+            # Add custom diamonds
+            if diamond_info.extra_diamonds:
+                for diamond_name, diamond_data in diamond_info.extra_diamonds.items():
+                    # Custom diamond z_offset = lower_north_y - custom_north_y
+                    calculated_z_offset = float(lower_north_y - diamond_data.north_vertex.y)
+                    display_name = f"Custom: {diamond_name.title()}"
+                    available_diamonds.append((display_name, diamond_name, calculated_z_offset))
+            
+            if len(available_diamonds) <= 1:
+                messagebox.showinfo("Z-Portal", "Need at least 2 diamonds to create portals between them.")
+                return None
+            
+            # Remove current layer from options (can't portal to self)
+            current_layer = self.ui.renderer.selected_sub_diamond_layer
+            available_diamonds = [(display, name, z_offset) for display, name, z_offset in available_diamonds if name != current_layer]
+            
+            if not available_diamonds:
+                messagebox.showinfo("Z-Portal", "No other diamonds available to portal to.")
+                return None
+            
+            # Create selection dialog
+            root = tk.Tk()
+            root.title(f"Z-Portal: {direction} {edge_name}")
+            root.geometry("400x300")
+            
+            # Center the window
+            root.eval('tk::PlaceWindow . center')
+            
+            selected_z_offset = None
+            
+            def on_select():
+                nonlocal selected_z_offset
+                selection = listbox.curselection()
+                if selection:
+                    index = selection[0]
+                    _, _, z_offset = available_diamonds[index]
+                    selected_z_offset = z_offset
+                    root.destroy()
+            
+            def on_cancel():
+                root.destroy()
+            
+            # Create UI elements
+            tk.Label(root, text=f"Select target diamond for portal:", font=("Arial", 12)).pack(pady=10)
+            
+            if current_elevation is not None:
+                current_diamond_name = "Unknown"
+                for display, name, z_offset in available_diamonds + [(f"Current: {current_layer.title()}", current_layer, current_elevation)]:
+                    if abs(z_offset - current_elevation) < 0.1:
+                        current_diamond_name = display
+                        break
+                tk.Label(root, text=f"Current target: {current_diamond_name}", font=("Arial", 10), fg="blue").pack(pady=5)
+            
+            listbox = tk.Listbox(root, font=("Arial", 11), height=8)
+            listbox.pack(pady=10, padx=20, fill="both", expand=True)
+            
+            for display_name, _, z_offset in available_diamonds:
+                listbox.insert(tk.END, f"{display_name} (z: {z_offset:.1f})")
+            
+            # Pre-select current target if editing existing portal
+            if current_elevation is not None:
+                for i, (_, _, z_offset) in enumerate(available_diamonds):
+                    if abs(z_offset - current_elevation) < 0.1:
+                        listbox.selection_set(i)
+                        break
+            
+            # Buttons
+            button_frame = tk.Frame(root)
+            button_frame.pack(pady=10)
+            
+            tk.Button(button_frame, text="Create Portal", command=on_select, font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+            tk.Button(button_frame, text="Cancel", command=on_cancel, font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+            
+            # Double-click to select
+            listbox.bind("<Double-Button-1>", lambda e: on_select())
+            
+            root.mainloop()
+            
+            return selected_z_offset
+                
+        except Exception as e:
+            print(f"Error showing z-portal dialog: {e}")
+            return None
+    
+    def _create_bidirectional_portal(self, source_edge_info, target_elevation):
+        """Create a bi-directional z-portal on the target diamond"""
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return
+        
+        # Get current diamond's z-offset to calculate which diamond to target
+        current_layer = self.ui.renderer.selected_sub_diamond_layer
+        source_diamond_data = None
+        
+        if current_layer == 'lower' and current_sprite.diamond_info.lower_diamond:
+            source_diamond_data = current_sprite.diamond_info.lower_diamond
+        elif current_layer == 'upper' and current_sprite.diamond_info.upper_diamond:
+            source_diamond_data = current_sprite.diamond_info.upper_diamond
+        elif current_layer in current_sprite.diamond_info.extra_diamonds:
+            source_diamond_data = current_sprite.diamond_info.extra_diamonds[current_layer]
+        
+        if not source_diamond_data:
+            return
+        
+        # Calculate source z_offset using same logic as dialog and export (lower_north_y - source_north_y)
+        lower_north_y = current_sprite.diamond_info.lower_diamond.north_vertex.y if current_sprite.diamond_info.lower_diamond else 0
+        source_z_offset = float(lower_north_y - source_diamond_data.north_vertex.y)
+        
+        # Find target diamond that matches the target elevation
+        target_diamond_data = None
+        target_layer_name = None
+        
+        # Check lower diamond (always has calculated z_offset = 0.0)
+        if current_sprite.diamond_info.lower_diamond:
+            calculated_z_offset = 0.0
+            if abs(calculated_z_offset - target_elevation) < 0.1:
+                target_diamond_data = current_sprite.diamond_info.lower_diamond
+                target_layer_name = 'lower'
+        
+        # Check upper diamond (z_offset = lower_north_y - upper_north_y)
+        if not target_diamond_data and current_sprite.diamond_info.upper_diamond:
+            calculated_z_offset = float(lower_north_y - current_sprite.diamond_info.upper_diamond.north_vertex.y)
+            if abs(calculated_z_offset - target_elevation) < 0.1:
+                target_diamond_data = current_sprite.diamond_info.upper_diamond
+                target_layer_name = 'upper'
+        
+        # Check custom diamonds (z_offset = lower_north_y - custom_north_y)
+        if not target_diamond_data:
+            for layer_name, diamond_data in current_sprite.diamond_info.extra_diamonds.items():
+                calculated_z_offset = float(lower_north_y - diamond_data.north_vertex.y)
+                if abs(calculated_z_offset - target_elevation) < 0.1:
+                    target_diamond_data = diamond_data
+                    target_layer_name = layer_name
+                    break
+        
+        if target_diamond_data and target_layer_name:
+            # Ensure target diamond has sub-diamonds initialized
+            target_diamond_data.ensure_sub_diamonds_initialized()
+            
+            if target_diamond_data.sub_diamonds:
+                # Find corresponding edge on target diamond
+                source_direction = source_edge_info['direction']
+                source_edge_name = source_edge_info['edge_name']
+                
+                if source_direction in target_diamond_data.sub_diamonds:
+                    target_sub_diamond = target_diamond_data.sub_diamonds[source_direction]
+                    target_edge = getattr(target_sub_diamond, source_edge_name, None)
+                    
+                    if target_edge:
+                        # Create return portal with source elevation
+                        target_edge.z_portal = source_z_offset
+                        print(f"Created bi-directional portal: {target_layer_name} {source_direction} {source_edge_name} -> elevation {source_z_offset}")
+                    else:
+                        print(f"Could not find target edge for bi-directional portal")
+                else:
+                    print(f"Target sub-diamond {source_direction} not found on {target_layer_name} layer")
+            else:
+                print(f"Target diamond {target_layer_name} has no sub-diamonds")
+        else:
+            print(f"Could not find target diamond at elevation {target_elevation} for bi-directional portal")
+    
+    def _remove_bidirectional_portal(self, source_edge_info, old_target_elevation):
+        """Remove bi-directional z-portal from the target diamond"""
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            return
+        
+        # Get the lower diamond's north vertex Y coordinate for z_offset calculation
+        lower_north_y = current_sprite.diamond_info.lower_diamond.north_vertex.y if current_sprite.diamond_info.lower_diamond else 0
+        
+        # Find target diamond that was at the old target elevation
+        target_diamond_data = None
+        target_layer_name = None
+        
+        # Check lower diamond (always has calculated z_offset = 0.0)
+        if current_sprite.diamond_info.lower_diamond:
+            calculated_z_offset = 0.0
+            if abs(calculated_z_offset - old_target_elevation) < 0.1:
+                target_diamond_data = current_sprite.diamond_info.lower_diamond
+                target_layer_name = 'lower'
+        
+        # Check upper diamond (z_offset = lower_north_y - upper_north_y)
+        if not target_diamond_data and current_sprite.diamond_info.upper_diamond:
+            calculated_z_offset = float(lower_north_y - current_sprite.diamond_info.upper_diamond.north_vertex.y)
+            if abs(calculated_z_offset - old_target_elevation) < 0.1:
+                target_diamond_data = current_sprite.diamond_info.upper_diamond
+                target_layer_name = 'upper'
+        
+        # Check custom diamonds (z_offset = lower_north_y - custom_north_y)
+        if not target_diamond_data:
+            for layer_name, diamond_data in current_sprite.diamond_info.extra_diamonds.items():
+                calculated_z_offset = float(lower_north_y - diamond_data.north_vertex.y)
+                if abs(calculated_z_offset - old_target_elevation) < 0.1:
+                    target_diamond_data = diamond_data
+                    target_layer_name = layer_name
+                    break
+        
+        if target_diamond_data and target_diamond_data.sub_diamonds:
+            # Find corresponding edge on target diamond
+            source_direction = source_edge_info['direction']
+            source_edge_name = source_edge_info['edge_name']
+            
+            if source_direction in target_diamond_data.sub_diamonds:
+                target_sub_diamond = target_diamond_data.sub_diamonds[source_direction]
+                target_edge = getattr(target_sub_diamond, source_edge_name, None)
+                
+                if target_edge and target_edge.z_portal is not None:
+                    target_edge.z_portal = None
+                    print(f"Removed bi-directional portal from {target_layer_name} {source_direction} {source_edge_name}")
+                else:
+                    print(f"No bi-directional portal found on {target_layer_name} {source_direction} {source_edge_name}")
+            else:
+                print(f"Target sub-diamond {source_direction} not found on {target_layer_name} layer")
+        else:
+            print(f"Could not find target diamond at elevation {old_target_elevation} for bi-directional portal removal")
+    
+    def handle_propagate_rotation(self):
+        """Propagate sub-diamond properties across all frames with automatic rotation mapping for ALL layers"""
+        if not self.ui.model:
+            print("Please load a spritesheet first before propagating rotations")
+            return
+        
+        if not self.ui.renderer.sub_diamond_mode:
+            print("Sub-diamond mode must be active to propagate rotations")
+            return
+        
+        current_sprite_index = self.ui.model.current_sprite_index
+        current_sprite = self.ui.model.get_current_sprite()
+        
+        if not current_sprite or not current_sprite.diamond_info:
+            print("Current sprite has no diamond data to propagate")
+            return
+        
+        # Collect ALL layers with sub-diamond data from source frame
+        source_layers = []
+        
+        # Check lower diamond
+        if current_sprite.diamond_info.lower_diamond and hasattr(current_sprite.diamond_info.lower_diamond, 'sub_diamonds'):
+            current_sprite.diamond_info.lower_diamond.ensure_sub_diamonds_initialized()
+            if current_sprite.diamond_info.lower_diamond.sub_diamonds:
+                source_layers.append(('lower', current_sprite.diamond_info.lower_diamond))
+        
+        # Check upper diamond
+        if current_sprite.diamond_info.upper_diamond and hasattr(current_sprite.diamond_info.upper_diamond, 'sub_diamonds'):
+            current_sprite.diamond_info.upper_diamond.ensure_sub_diamonds_initialized()
+            if current_sprite.diamond_info.upper_diamond.sub_diamonds:
+                source_layers.append(('upper', current_sprite.diamond_info.upper_diamond))
+        
+        # Check custom diamonds
+        if current_sprite.diamond_info.extra_diamonds:
+            for custom_name, custom_diamond in current_sprite.diamond_info.extra_diamonds.items():
+                if hasattr(custom_diamond, 'sub_diamonds'):
+                    custom_diamond.ensure_sub_diamonds_initialized()
+                    if custom_diamond.sub_diamonds:
+                        source_layers.append((custom_name, custom_diamond))
+        
+        if not source_layers:
+            print("No layers with sub-diamond data available for propagation")
+            return
+        
+        print(f"\n=== PROPAGATING ALL LAYERS TO ALL FRAMES ===")
+        print(f"Source frame: {current_sprite_index}")
+        print(f"Total frames: {len(self.ui.model.sprites)}")
+        print(f"Layers to propagate: {[layer_name for layer_name, _ in source_layers]}")
+        
+        # Track successful propagations
+        total_propagations = 0
+        successful_propagations = 0
+        
+        # First, ensure all target frames are analyzed
+        print(f"Ensuring all frames are analyzed...")
+        for target_frame_index in range(len(self.ui.model.sprites)):
+            if target_frame_index == current_sprite_index:
+                continue  # Skip source frame
+            
+            target_sprite = self.ui.model.sprites[target_frame_index]
+            if not target_sprite:
+                continue
+            
+            # Analyze target frame if not already analyzed
+            if not target_sprite.diamond_info:
+                print(f"  Analyzing frame {target_frame_index}...")
+                self.ui.analyzer.analyze_sprite(target_frame_index)
+                
+                if not target_sprite.diamond_info:
+                    print(f"  Warning: Failed to analyze frame {target_frame_index}")
+                    continue
+        
+        # Now propagate all layers to all other frames
+        for target_frame_index in range(len(self.ui.model.sprites)):
+            if target_frame_index == current_sprite_index:
+                continue  # Skip source frame
+            
+            target_sprite = self.ui.model.sprites[target_frame_index]
+            if not target_sprite:
+                continue
+            
+            # Calculate rotation steps (45° counter-clockwise per frame)
+            rotation_steps = (target_frame_index - current_sprite_index) % len(self.ui.model.sprites)
+            
+            print(f"\nPropagating to frame {target_frame_index} (rotation steps: {rotation_steps})")
+            
+            # Propagate each layer
+            frame_success_count = 0
+            for layer_name, source_diamond_data in source_layers:
+                total_propagations += 1
+                
+                # Create or get target diamond data
+                if self._create_custom_diamond_for_frame(target_sprite, layer_name, source_diamond_data):
+                    # Apply rotation mapping to properties
+                    if self._apply_rotation_mapping(target_sprite, layer_name, source_diamond_data, rotation_steps):
+                        successful_propagations += 1
+                        frame_success_count += 1
+                        print(f"  ✓ {layer_name} layer propagated")
+                    else:
+                        print(f"  ✗ Failed to apply rotation mapping to {layer_name} layer")
+                else:
+                    print(f"  ✗ Failed to create {layer_name} layer")
+            
+            print(f"Frame {target_frame_index}: {frame_success_count}/{len(source_layers)} layers successful")
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self.ui.update_sprite_info()
+        
+        print(f"\n=== PROPAGATION COMPLETE ===")
+        print(f"Successfully propagated {successful_propagations}/{total_propagations} layer instances")
+        print(f"Across {len(self.ui.model.sprites)-1} target frames")
+        print(f"Rotation pattern: N→W→S→E (45° counter-clockwise per frame)")
+    
+    def _create_custom_diamond_for_frame(self, target_sprite, source_layer, source_diamond_data):
+        """Create or ensure diamond layer exists for target frame at same z-height"""
+        from spritesheet_model import GameplayDiamondData
+        
+        # Check if target sprite has diamond_info
+        if not target_sprite.diamond_info:
+            print(f"  Warning: Target frame has no diamond analysis data - skipping")
+            return False
+        
+        # Handle lower diamond - should always exist from analysis
+        if source_layer == 'lower':
+            if not target_sprite.diamond_info.lower_diamond:
+                print(f"  Warning: Target frame missing lower diamond - this should exist from analysis")
+                return False
+            print(f"  Lower diamond already exists")
+            return True
+        
+        # Handle upper diamond
+        elif source_layer == 'upper':
+            if not target_sprite.diamond_info.upper_diamond:
+                if not target_sprite.diamond_info.lower_diamond:
+                    print(f"  Cannot create upper diamond - no lower diamond available")
+                    return False
+                
+                print(f"  Creating upper diamond at same z-height")
+                # Create upper diamond based on lower diamond with same z_offset as source
+                lower_diamond = target_sprite.diamond_info.lower_diamond
+                target_sprite.diamond_info.upper_diamond = GameplayDiamondData(
+                    north_vertex=lower_diamond.north_vertex,
+                    south_vertex=lower_diamond.south_vertex,
+                    east_vertex=lower_diamond.east_vertex,
+                    west_vertex=lower_diamond.west_vertex,
+                    center=lower_diamond.center,
+                    z_offset=source_diamond_data.z_offset,
+                    north_east_midpoint=lower_diamond.north_east_midpoint,
+                    east_south_midpoint=lower_diamond.east_south_midpoint,
+                    south_west_midpoint=lower_diamond.south_west_midpoint,
+                    west_north_midpoint=lower_diamond.west_north_midpoint
+                )
+                # Ensure sub-diamonds are initialized
+                target_sprite.diamond_info.upper_diamond.ensure_sub_diamonds_initialized()
+            print(f"  Upper diamond ready")
+            return True
+        
+        # Handle custom diamonds
+        else:
+            if source_layer not in target_sprite.diamond_info.extra_diamonds:
+                if not target_sprite.diamond_info.lower_diamond:
+                    print(f"  Cannot create custom diamond - no lower diamond available")
+                    return False
+                
+                print(f"  Creating custom diamond '{source_layer}' at same z-height")
+                # Create custom diamond with correct vertices based on source z_offset
+                lower_diamond = target_sprite.diamond_info.lower_diamond
+                
+                # Calculate correct vertices by shifting lower diamond by z_offset difference
+                z_offset_diff = int(source_diamond_data.z_offset)  # How much higher than lower diamond
+                
+                from spritesheet_model import Point
+                target_sprite.diamond_info.extra_diamonds[source_layer] = GameplayDiamondData(
+                    north_vertex=Point(x=lower_diamond.north_vertex.x, y=lower_diamond.north_vertex.y - z_offset_diff),
+                    south_vertex=Point(x=lower_diamond.south_vertex.x, y=lower_diamond.south_vertex.y - z_offset_diff),
+                    east_vertex=Point(x=lower_diamond.east_vertex.x, y=lower_diamond.east_vertex.y - z_offset_diff),
+                    west_vertex=Point(x=lower_diamond.west_vertex.x, y=lower_diamond.west_vertex.y - z_offset_diff),
+                    center=Point(x=lower_diamond.center.x, y=lower_diamond.center.y - z_offset_diff),
+                    z_offset=source_diamond_data.z_offset,
+                    north_east_midpoint=Point(x=lower_diamond.north_east_midpoint.x, y=lower_diamond.north_east_midpoint.y - z_offset_diff),
+                    east_south_midpoint=Point(x=lower_diamond.east_south_midpoint.x, y=lower_diamond.east_south_midpoint.y - z_offset_diff),
+                    south_west_midpoint=Point(x=lower_diamond.south_west_midpoint.x, y=lower_diamond.south_west_midpoint.y - z_offset_diff),
+                    west_north_midpoint=Point(x=lower_diamond.west_north_midpoint.x, y=lower_diamond.west_north_midpoint.y - z_offset_diff)
+                )
+                # Ensure sub-diamonds are initialized for the new custom diamond
+                target_sprite.diamond_info.extra_diamonds[source_layer].ensure_sub_diamonds_initialized()
+                print(f"  Custom diamond '{source_layer}' created with z_offset {source_diamond_data.z_offset}")
+            else:
+                print(f"  Custom diamond '{source_layer}' already exists")
+            print(f"  Custom diamond '{source_layer}' ready")
+            return True
+    
+    def _apply_rotation_mapping(self, target_sprite, target_layer, source_diamond_data, rotation_steps):
+        """Apply rotational transformation logic: N→W→S→E→N pattern"""
+        # Get target diamond data
+        target_diamond_data = None
+        if target_layer == 'lower':
+            target_diamond_data = target_sprite.diamond_info.lower_diamond
+        elif target_layer == 'upper':
+            target_diamond_data = target_sprite.diamond_info.upper_diamond
+        elif target_layer in target_sprite.diamond_info.extra_diamonds:
+            target_diamond_data = target_sprite.diamond_info.extra_diamonds[target_layer]
+        
+        if not target_diamond_data:
+            print(f"    No target diamond data found for {target_layer}")
+            return False
+        
+        # Ensure target diamond has sub-diamonds initialized
+        target_diamond_data.ensure_sub_diamonds_initialized()
+        
+        if not target_diamond_data.sub_diamonds:
+            print(f"    No sub-diamonds initialized for target {target_layer}")
+            return False
+        
+        # Define rotation mapping: N→W→S→E→N (45° counter-clockwise)
+        direction_rotation = {
+            'north': ['north', 'west', 'south', 'east'],
+            'west': ['west', 'south', 'east', 'north'],
+            'south': ['south', 'east', 'north', 'west'],
+            'east': ['east', 'north', 'west', 'south']
+        }
+        
+        print(f"    Applying {rotation_steps} rotation steps (N→W→S→E pattern)")
+        
+        # Copy properties with rotation mapping
+        for source_direction, source_sub_diamond in source_diamond_data.sub_diamonds.items():
+            if source_direction not in direction_rotation:
+                print(f"    Warning: Unknown source direction {source_direction}")
+                continue
+            
+            # Calculate target direction after rotation
+            rotation_sequence = direction_rotation[source_direction]
+            target_direction = rotation_sequence[rotation_steps % 4]
+            
+            if target_direction not in target_diamond_data.sub_diamonds:
+                print(f"    Warning: Target direction {target_direction} not found in target diamond")
+                continue
+            
+            target_sub_diamond = target_diamond_data.sub_diamonds[target_direction]
+            
+            print(f"    {source_direction} → {target_direction}")
+            
+            # Copy surface properties
+            target_sub_diamond.is_walkable = source_sub_diamond.is_walkable
+            
+            # Copy edge properties with rotation
+            self._copy_edge_properties_with_rotation(source_sub_diamond, target_sub_diamond, rotation_steps)
+        
+        # Update shared edges to maintain consistency
+        self._update_all_shared_edges(target_diamond_data.sub_diamonds)
+        
+        print(f"    Rotation mapping applied successfully")
+        return True
+    
+    def _copy_edge_properties_with_rotation(self, source_sub_diamond, target_sub_diamond, rotation_steps):
+        """Copy edge properties with proper edge rotation mapping"""
+        # Define edge rotation mapping: edges rotate with the sub-diamond
+        # Each edge rotates 45° counter-clockwise with each step
+        edge_rotation = {
+            'north_west_edge': ['north_west_edge', 'south_west_edge', 'south_east_edge', 'north_east_edge'],
+            'north_east_edge': ['north_east_edge', 'north_west_edge', 'south_west_edge', 'south_east_edge'],
+            'south_west_edge': ['south_west_edge', 'south_east_edge', 'north_east_edge', 'north_west_edge'],
+            'south_east_edge': ['south_east_edge', 'north_east_edge', 'north_west_edge', 'south_west_edge']
+        }
+        
+        # Copy each edge with rotation
+        for source_edge_name in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+            source_edge = getattr(source_sub_diamond, source_edge_name, None)
+            if not source_edge:
+                continue
+            
+            # Calculate target edge after rotation
+            if source_edge_name not in edge_rotation:
+                continue
+            
+            rotation_sequence = edge_rotation[source_edge_name]
+            target_edge_name = rotation_sequence[rotation_steps % 4]
+            
+            target_edge = getattr(target_sub_diamond, target_edge_name, None)
+            if not target_edge:
+                continue
+            
+            # Copy properties
+            target_edge.blocks_line_of_sight = source_edge.blocks_line_of_sight
+            target_edge.blocks_movement = source_edge.blocks_movement
+            target_edge.z_portal = source_edge.z_portal
+            
+            print(f"      {source_edge_name} → {target_edge_name}")

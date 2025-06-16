@@ -1280,6 +1280,8 @@ class SpriteRenderer:
                 color = self._get_los_color(edge_props.blocks_line_of_sight)
             elif self.sub_diamond_editing_mode == 'edge_movement':
                 color = self._get_movement_color(edge_props.blocks_movement)
+            elif self.sub_diamond_editing_mode == 'z_portal':
+                color = self._get_z_portal_color(edge_props.z_portal)
             else:  # surface mode - show combined view
                 color = self._get_combined_edge_color(edge_props.blocks_line_of_sight, edge_props.blocks_movement)
             
@@ -1317,6 +1319,15 @@ class SpriteRenderer:
             return (255, 0, 0)  # Red for blocks movement
         else:
             return (0, 255, 0)  # Green for allows movement
+    
+    def _get_z_portal_color(self, z_portal):
+        """Get color for z-portal property"""
+        if z_portal is None:
+            return (128, 128, 128)  # Gray for no portal
+        else:
+            # Use a bright magenta/purple color for z-portals
+            # Could potentially vary color based on target elevation
+            return (255, 0, 255)  # Magenta for active portal
     
     def _get_combined_edge_color(self, line_of_sight, blocks_movement):
         """Get combined color for both line of sight and movement properties"""

@@ -38,8 +38,9 @@ class EdgeProperties(BaseModel):
     """
     Properties for an edge defining its interaction with game mechanics.
     
-    Each edge can independently control line of sight and movement blocking
-    for fine-grained control over game mechanics like walls, windows, etc.
+    Each edge can independently control line of sight, movement blocking,
+    and z-level teleportation for fine-grained control over game mechanics
+    like walls, windows, stairs, and elevators.
     """
     blocks_line_of_sight: Optional[bool] = Field(
         default=None,
@@ -48,6 +49,10 @@ class EdgeProperties(BaseModel):
     blocks_movement: Optional[bool] = Field(
         default=None,
         description="Whether this edge blocks movement (None=unset, True=blocks, False=passable)"
+    )
+    z_portal: Optional[float] = Field(
+        default=None,
+        description="Z-elevation portal destination (None=no portal, float=target z-level). Creates bi-directional teleportation for stairs/elevators."
     )
     
     def get_combined_property(self) -> EdgeProperty:
@@ -63,6 +68,16 @@ class EdgeProperties(BaseModel):
         else:
             # Mixed or partial settings - default to blocks for safety
             return EdgeProperty.BLOCKS
+    
+    def has_z_portal(self) -> bool:
+        """Check if this edge has a z-portal"""
+        return self.z_portal is not None
+    
+    def get_portal_info(self) -> str:
+        """Get human-readable portal information"""
+        if self.z_portal is None:
+            return "No Portal"
+        return f"Portal → Z:{self.z_portal:.1f}"
 
 class Point(BaseModel):
     """
@@ -934,7 +949,8 @@ class SpritesheetModel(BaseModel):
                         edge = getattr(sub_diamond, edge_attr)
                         edge_props[edge_name] = {
                             'blocks_line_of_sight': edge.blocks_line_of_sight,
-                            'blocks_movement': edge.blocks_movement
+                            'blocks_movement': edge.blocks_movement,
+                            'z_portal': edge.z_portal
                         }
                 
                 # Always include edge properties structure
@@ -1243,7 +1259,8 @@ class SpritesheetModel(BaseModel):
                             if hasattr(sub_diamond, edge_attr):
                                 edge_props = EdgeProperties(
                                     blocks_line_of_sight=edge_data.get('blocks_line_of_sight'),
-                                    blocks_movement=edge_data.get('blocks_movement')
+                                    blocks_movement=edge_data.get('blocks_movement'),
+                                    z_portal=edge_data.get('z_portal')
                                 )
                                 setattr(sub_diamond, edge_attr, edge_props)
                     

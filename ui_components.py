@@ -401,11 +401,11 @@ class SubDiamondControlsPanel:
         
         # Instructions
         self.components['instructions_label'] = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 75),
-            text='Controls:\nF1/F2: Lower/Upper Diamond\nF3: Cycle Layers\n1: Line of Sight, 2: Walkability\nLeft Click: Toggle, Right Click: None',
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 100),
+            text='Controls:\nF1/F2: Lower/Upper Diamond\nF3: Cycle Layers\n1: Line of Sight, 2: Walkability\n3: Edge Movement, 4: Z-Portal\nLeft Click: Set/Modify, Right Click: Remove',
             manager=self.manager
         )
-        current_y += 85
+        current_y += 110
         
         # Color legend
         self.components['color_legend_label'] = pygame_gui.elements.UILabel(
@@ -415,6 +415,48 @@ class SubDiamondControlsPanel:
         )
         current_y += 110
         
+        # Sub-diamond bulk editing controls - Row 1
+        self.components['set_default_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 150, 30),
+            text='Set Default',
+            manager=self.manager
+        )
+        self.components['clear_all_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 170, current_y, 160, 30),
+            text='Clear All',
+            manager=self.manager
+        )
+        current_y += 35
+        
+        # Sub-diamond bulk editing controls - Row 2
+        self.components['set_all_true_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 150, 30),
+            text='All Block',
+            manager=self.manager
+        )
+        self.components['set_all_false_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 170, current_y, 160, 30),
+            text='All Allow',
+            manager=self.manager
+        )
+        current_y += 40
+        
+        # Propagation button for isometric rotations
+        self.components['propagate_rotation_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 30),
+            text='Propagate to All Frames (Rotate)',
+            manager=self.manager
+        )
+        current_y += 35
+        
+        # Default settings info
+        self.components['default_info_label'] = pygame_gui.elements.UILabel(
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 75),
+            text='Default:\nUpper Diamond: All Allow (green)\nLower Diamond: All Block (red)\nAll Block/Allow: Set all properties',
+            manager=self.manager
+        )
+        current_y += 85
+        
         self.height = current_y - self.start_y
     
     def update_status(self, sub_diamond_mode, layer, editing_mode):
@@ -422,5 +464,12 @@ class SubDiamondControlsPanel:
         mode_text = "ON" if sub_diamond_mode else "OFF"
         self.components['mode_status_label'].set_text(f'Sub-Diamond Mode: {mode_text}')
         self.components['layer_status_label'].set_text(f'Layer: {layer.upper()}')
-        self.components['editing_mode_label'].set_text(f'Editing: {editing_mode.upper().replace("_", " ")}')
+        
+        # Format editing mode name properly
+        if editing_mode == 'z_portal':
+            mode_display = 'Z-PORTAL'
+        else:
+            mode_display = editing_mode.upper().replace("_", " ")
+        
+        self.components['editing_mode_label'].set_text(f'Editing: {mode_display}')
 
