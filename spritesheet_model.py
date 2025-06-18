@@ -331,8 +331,55 @@ class GameplayDiamondData(BaseModel):
     
     def ensure_sub_diamonds_initialized(self):
         """Public method to ensure sub-diamonds are properly initialized"""
-        if not self.sub_diamonds:
+        print(f"\n[DEBUG] ================ ENSURE_SUB_DIAMONDS_INITIALIZED START ================")
+        print(f"[DEBUG] Called from: {self.__class__.__name__}")
+        print(f"[DEBUG] Current z_offset: {self.z_offset}")
+        print(f"[DEBUG] Current sub_diamonds exists: {self.sub_diamonds is not None}")
+        print(f"[DEBUG] Current sub_diamonds length: {len(self.sub_diamonds) if self.sub_diamonds else 0}")
+        
+        if self.sub_diamonds:
+            print(f"[DEBUG] EXISTING SUB-DIAMONDS FOUND: {list(self.sub_diamonds.keys())}")
+            print(f"[DEBUG] Taking PRESERVE path - analyzing existing data...")
+            
+            total_defined_properties = 0
+            for quadrant, sub_diamond in self.sub_diamonds.items():
+                walkable = sub_diamond.is_walkable
+                print(f"[DEBUG] {quadrant}: walkable={walkable}")
+                
+                # Count edge properties that are set (not None)
+                defined_props = 0
+                for edge_name in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+                    if hasattr(sub_diamond, edge_name):
+                        edge = getattr(sub_diamond, edge_name)
+                        los = edge.blocks_line_of_sight
+                        mov = edge.blocks_movement
+                        portal = edge.z_portal
+                        
+                        if los is not None:
+                            defined_props += 1
+                        if mov is not None:
+                            defined_props += 1
+                        if portal is not None:
+                            defined_props += 1
+                            
+                        print(f"[DEBUG]   {edge_name}: los={los}, mov={mov}, portal={portal}")
+                
+                if walkable is not None:
+                    defined_props += 1
+                    
+                total_defined_properties += defined_props
+                print(f"[DEBUG] {quadrant} defined properties: {defined_props}")
+            
+            print(f"[DEBUG] TOTAL DEFINED PROPERTIES ACROSS ALL SUB-DIAMONDS: {total_defined_properties}")
+            print(f"[DEBUG] PRESERVING EXISTING SUB-DIAMONDS - NO ALGORITHMIC INITIALIZATION")
+            
+        else:
+            print(f"[DEBUG] NO SUB-DIAMONDS FOUND - taking ALGORITHMIC INITIALIZATION path")
+            print(f"[DEBUG] About to call _initialize_sub_diamonds_and_edges()")
             self._initialize_sub_diamonds_and_edges()
+            print(f"[DEBUG] After _initialize_sub_diamonds_and_edges() - sub_diamonds count: {len(self.sub_diamonds) if self.sub_diamonds else 0}")
+        
+        print(f"[DEBUG] ================ ENSURE_SUB_DIAMONDS_INITIALIZED END ================\n")
     
     def set_sub_diamond_walkability(self, quadrant: str, is_walkable: bool):
         """Set walkability for a specific sub-diamond quadrant"""
@@ -1132,7 +1179,28 @@ class SpritesheetModel(BaseModel):
             
             # Restore diamond_info if present
             if 'diamond_info' in sprite_data:
+                print(f"\n[DEBUG] ======= LOADING SPRITE {sprite.sprite_index} DIAMOND_INFO =======")
                 sprite.diamond_info = cls._import_diamond_info(sprite_data['diamond_info'])
+                
+                if sprite.diamond_info:
+                    print(f"[DEBUG] Sprite {sprite.sprite_index} diamond_info loaded:")
+                    print(f"[DEBUG] - Lower diamond: {'✓' if sprite.diamond_info.lower_diamond else '✗'}")
+                    print(f"[DEBUG] - Upper diamond: {'✓' if sprite.diamond_info.upper_diamond else '✗'}")
+                    print(f"[DEBUG] - Extra diamonds: {list(sprite.diamond_info.extra_diamonds.keys()) if sprite.diamond_info.extra_diamonds else 'None'}")
+                    
+                    # Check sub-diamonds for each diamond
+                    if sprite.diamond_info.lower_diamond:
+                        print(f"[DEBUG] - Lower sub-diamonds: {list(sprite.diamond_info.lower_diamond.sub_diamonds.keys()) if sprite.diamond_info.lower_diamond.sub_diamonds else 'None'}")
+                    if sprite.diamond_info.upper_diamond:
+                        print(f"[DEBUG] - Upper sub-diamonds: {list(sprite.diamond_info.upper_diamond.sub_diamonds.keys()) if sprite.diamond_info.upper_diamond.sub_diamonds else 'None'}")
+                    if sprite.diamond_info.extra_diamonds:
+                        for custom_name, custom_diamond in sprite.diamond_info.extra_diamonds.items():
+                            print(f"[DEBUG] - {custom_name} sub-diamonds: {list(custom_diamond.sub_diamonds.keys()) if custom_diamond.sub_diamonds else 'None'}")
+                else:
+                    print(f"[DEBUG] Sprite {sprite.sprite_index} diamond_info is None after import!")
+                print(f"[DEBUG] ======= SPRITE {sprite.sprite_index} DIAMOND_INFO COMPLETE =======\n")
+            else:
+                print(f"[DEBUG] Sprite {sprite.sprite_index}: No diamond_info in JSON data")
             
             # Restore custom keypoints if present
             if 'custom_keypoints' in sprite_data:
@@ -1188,21 +1256,41 @@ class SpritesheetModel(BaseModel):
     @classmethod
     def _import_diamond_info(cls, diamond_data: Dict[str, Any]) -> DiamondInfo:
         """Import diamond info from clean JSON format"""
+        print(f"\n[DEBUG] ============== IMPORTING DIAMOND INFO FROM JSON ==============")
+        
         # Import lower diamond
+        print(f"[DEBUG] Importing lower diamond...")
         lower_diamond = cls._import_single_diamond(diamond_data['lower_diamond'])
+        print(f"[DEBUG] Lower diamond imported with sub_diamonds: {bool(lower_diamond.sub_diamonds)}")
         
         # Import upper diamond if present
         upper_diamond = None
         if 'upper_diamond' in diamond_data:
+            print(f"[DEBUG] Importing upper diamond...")
             upper_diamond = cls._import_single_diamond(diamond_data['upper_diamond'])
+            print(f"[DEBUG] Upper diamond imported with sub_diamonds: {bool(upper_diamond.sub_diamonds)}")
+        else:
+            print(f"[DEBUG] No upper diamond in JSON data")
         
         # Import extra diamonds if present
         extra_diamonds = {}
         if 'extra_diamonds' in diamond_data:
+            print(f"[DEBUG] Found extra_diamonds in JSON: {list(diamond_data['extra_diamonds'].keys())}")
             for diamond_name, extra_diamond_data in diamond_data['extra_diamonds'].items():
+                print(f"[DEBUG] Importing custom diamond: {diamond_name}")
                 extra_diamonds[diamond_name] = cls._import_single_diamond(extra_diamond_data)
+                print(f"[DEBUG] Custom diamond {diamond_name} imported with sub_diamonds: {bool(extra_diamonds[diamond_name].sub_diamonds)}")
+        else:
+            print(f"[DEBUG] No extra_diamonds found in JSON data")
         
-        return DiamondInfo(
+        print(f"\n[DEBUG] Creating DiamondInfo with:")
+        print(f"[DEBUG] - Lower diamond: {'✓' if lower_diamond else '✗'}")
+        print(f"[DEBUG] - Upper diamond: {'✓' if upper_diamond else '✗'}")
+        print(f"[DEBUG] - Extra diamonds count: {len(extra_diamonds)}")
+        if extra_diamonds:
+            print(f"[DEBUG] - Extra diamonds: {list(extra_diamonds.keys())}")
+        
+        diamond_info = DiamondInfo(
             diamond_height=diamond_data['diamond_height'],
             predicted_flat_height=diamond_data['predicted_flat_height'],
             effective_height=diamond_data['effective_height'],
@@ -1216,6 +1304,11 @@ class SpritesheetModel(BaseModel):
             upper_z_offset=diamond_data['upper_z_offset'],
             diamonds_z_offset=diamond_data.get('diamonds_z_offset')
         )
+        
+        print(f"[DEBUG] DiamondInfo created with extra_diamonds: {list(diamond_info.extra_diamonds.keys())}")
+        print(f"[DEBUG] ============== DIAMOND INFO IMPORT COMPLETE ==============\n")
+        
+        return diamond_info
     
     @classmethod
     def _import_single_diamond(cls, diamond_data: Dict[str, Any]) -> GameplayDiamondData:
@@ -1237,8 +1330,20 @@ class SpritesheetModel(BaseModel):
         
         # Import sub-diamonds if present
         if 'sub_diamonds' in diamond_data and diamond_data['sub_diamonds']:
+            print(f"\n[DEBUG] ============== IMPORTING SUB-DIAMONDS FROM JSON ==============")
+            print(f"[DEBUG] Loading sub-diamonds from JSON: {list(diamond_data['sub_diamonds'].keys())}")
+            print(f"[DEBUG] Diamond z_offset: {diamond_data['z_offset']}")
+            
             gameplay_diamond.sub_diamonds = {}
+            total_loaded_properties = 0
+            
             for quadrant, sub_data in diamond_data['sub_diamonds'].items():
+                print(f"\n[DEBUG] === LOADING {quadrant.upper()} SUB-DIAMOND ===")
+                print(f"[DEBUG] Walkable: {sub_data.get('is_walkable')}")
+                
+                loaded_props = 0
+                if sub_data.get('is_walkable') is not None:
+                    loaded_props += 1
                 # Handle both old format (main_vertex/midpoint_a/midpoint_b) and new format (4 vertices)
                 if 'north_vertex' in sub_data:
                     # New format with proper 4 vertices
@@ -1254,8 +1359,10 @@ class SpritesheetModel(BaseModel):
                     
                     # Import edge properties for this sub-diamond if present
                     if 'edge_properties' in sub_data:
+                        print(f"[DEBUG] Loading edge properties: {list(sub_data['edge_properties'].keys())}")
                         for edge_name, edge_data in sub_data['edge_properties'].items():
                             edge_attr = f"{edge_name}_edge"
+                            print(f"[DEBUG] Loading {edge_attr}: los={edge_data.get('blocks_line_of_sight')}, mov={edge_data.get('blocks_movement')}, portal={edge_data.get('z_portal')}")
                             if hasattr(sub_diamond, edge_attr):
                                 edge_props = EdgeProperties(
                                     blocks_line_of_sight=edge_data.get('blocks_line_of_sight'),
@@ -1263,10 +1370,23 @@ class SpritesheetModel(BaseModel):
                                     z_portal=edge_data.get('z_portal')
                                 )
                                 setattr(sub_diamond, edge_attr, edge_props)
+                                
+                                # Count loaded properties
+                                if edge_data.get('blocks_line_of_sight') is not None:
+                                    loaded_props += 1
+                                if edge_data.get('blocks_movement') is not None:
+                                    loaded_props += 1
+                                if edge_data.get('z_portal') is not None:
+                                    loaded_props += 1
+                    else:
+                        print(f"[DEBUG] No edge_properties found in sub_data")
                     
                     gameplay_diamond.sub_diamonds[quadrant] = sub_diamond
+                    total_loaded_properties += loaded_props
+                    print(f"[DEBUG] {quadrant} sub-diamond loaded with {loaded_props} defined properties")
                 else:
                     # Old format - convert triangular to diamond shape (no edge properties to import)
+                    print(f"[DEBUG] Converting old format triangular to diamond shape")
                     main_vertex = Point(x=sub_data['main_vertex']['x'], y=sub_data['main_vertex']['y'])
                     midpoint_a = Point(x=sub_data['midpoint_a']['x'], y=sub_data['midpoint_a']['y'])
                     midpoint_b = Point(x=sub_data['midpoint_b']['x'], y=sub_data['midpoint_b']['y'])
@@ -1313,6 +1433,14 @@ class SpritesheetModel(BaseModel):
                             center=Point(x=(main_vertex.x + center.x) // 2, y=(main_vertex.y + center.y) // 2),
                             is_walkable=sub_data.get('is_walkable')
                         )
+            
+            print(f"\n[DEBUG] SUB-DIAMONDS IMPORT SUMMARY:")
+            print(f"[DEBUG] Total quadrants loaded: {len(gameplay_diamond.sub_diamonds)}")
+            print(f"[DEBUG] Total defined properties loaded: {total_loaded_properties}")
+            print(f"[DEBUG] Sub-diamonds keys: {list(gameplay_diamond.sub_diamonds.keys())}")
+            print(f"[DEBUG] ============== SUB-DIAMONDS IMPORT COMPLETE ==============\n")
+        else:
+            print(f"[DEBUG] No sub-diamonds found in JSON data")
         
         return gameplay_diamond
     

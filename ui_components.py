@@ -449,10 +449,15 @@ class SubDiamondControlsPanel:
         )
         current_y += 40
         
-        # Propagation button for isometric rotations
+        # Propagation buttons
         self.components['propagate_rotation_button'] = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect(self.start_x + 10, current_y, 320, 30),
-            text='Propagate to All Frames (Rotate)',
+            relative_rect=pygame.Rect(self.start_x + 10, current_y, 150, 30),
+            text='Propagate (Rotate)',
+            manager=self.manager
+        )
+        self.components['propagate_direct_button'] = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect(self.start_x + 170, current_y, 160, 30),
+            text='Propagate (Direct)',
             manager=self.manager
         )
         current_y += 35

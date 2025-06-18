@@ -26,8 +26,8 @@ RIGHT_PANEL_WIDTH = 350
 DRAWING_AREA_WIDTH = WINDOW_WIDTH - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH
 DRAWING_AREA_HEIGHT = WINDOW_HEIGHT
 
-DEFAULT_SPRITESHEET_DIR = r"C:\Users\Tommaso\Documents\Dev\Spriter\tiles\isometric_tiles\blocks"
-DEFAULT_SAVE_DIR = r"C:\Users\Tommaso\Documents\Dev\Spriter\analysis_data"
+DEFAULT_SPRITESHEET_DIR = r"C:\Users\Tommaso\Documents\Dev\IsoSpriter\isometric_tiles"
+DEFAULT_SAVE_DIR = r"C:\Users\Tommaso\Documents\Dev\IsoSpriter\analysis_data"
 
 
 class AdvancedSpritesheetUI:
@@ -206,7 +206,11 @@ class AdvancedSpritesheetUI:
         )
         
         # Analyze current sprite if not already analyzed
-        if current_sprite.pixel_count is None:
+        # BUT: Don't re-analyze if sprite has comprehensive diamond data loaded from JSON
+        needs_analysis = (current_sprite.pixel_count is None and
+                         not self._has_comprehensive_diamond_analysis(current_sprite))
+        
+        if needs_analysis:
             self.analyzer.analyze_sprite(self.model.current_sprite_index)
         
         # Update pixel count
@@ -238,6 +242,76 @@ class AdvancedSpritesheetUI:
         # Update frame-specific Z offset
         frame_z_offset = current_sprite.frame_upper_z_offset
         self.analysis_controls_panel.components['frame_z_input'].set_text(str(frame_z_offset))
+    
+    def _has_comprehensive_diamond_analysis(self, sprite):
+        """Check if sprite has comprehensive diamond analysis data that shouldn't be overwritten"""
+        if not sprite.diamond_info:
+            return False
+        
+        # Check if we have meaningful sub-diamond data
+        has_sub_diamond_data = False
+        
+        # Check lower diamond for sub-diamond data
+        if (sprite.diamond_info.lower_diamond and
+            hasattr(sprite.diamond_info.lower_diamond, 'sub_diamonds') and
+            sprite.diamond_info.lower_diamond.sub_diamonds):
+            
+            # Check if any sub-diamond has actual properties (not all None)
+            for sub_diamond in sprite.diamond_info.lower_diamond.sub_diamonds.values():
+                if (sub_diamond.is_walkable is not None or
+                    any(getattr(getattr(sub_diamond, edge_name, None), 'blocks_line_of_sight', None) is not None or
+                        getattr(getattr(sub_diamond, edge_name, None), 'blocks_movement', None) is not None or
+                        getattr(getattr(sub_diamond, edge_name, None), 'z_portal', None) is not None
+                        for edge_name in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge'])):
+                    has_sub_diamond_data = True
+                    break
+        
+        # Check upper diamond for sub-diamond data
+        if (not has_sub_diamond_data and sprite.diamond_info.upper_diamond and
+            hasattr(sprite.diamond_info.upper_diamond, 'sub_diamonds') and
+            sprite.diamond_info.upper_diamond.sub_diamonds):
+            
+            for sub_diamond in sprite.diamond_info.upper_diamond.sub_diamonds.values():
+                if (sub_diamond.is_walkable is not None or
+                    any(getattr(getattr(sub_diamond, edge_name, None), 'blocks_line_of_sight', None) is not None or
+                        getattr(getattr(sub_diamond, edge_name, None), 'blocks_movement', None) is not None or
+                        getattr(getattr(sub_diamond, edge_name, None), 'z_portal', None) is not None
+                        for edge_name in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge'])):
+                    has_sub_diamond_data = True
+                    break
+        
+        # Check custom diamonds for sub-diamond data
+        if (not has_sub_diamond_data and sprite.diamond_info.extra_diamonds):
+            for custom_diamond in sprite.diamond_info.extra_diamonds.values():
+                if (hasattr(custom_diamond, 'sub_diamonds') and custom_diamond.sub_diamonds):
+                    for sub_diamond in custom_diamond.sub_diamonds.values():
+                        if (sub_diamond.is_walkable is not None or
+                            any(getattr(getattr(sub_diamond, edge_name, None), 'blocks_line_of_sight', None) is not None or
+                                getattr(getattr(sub_diamond, edge_name, None), 'blocks_movement', None) is not None or
+                                getattr(getattr(sub_diamond, edge_name, None), 'z_portal', None) is not None
+                                for edge_name in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge'])):
+                            has_sub_diamond_data = True
+                            break
+                if has_sub_diamond_data:
+                    break
+        
+        # Also check for custom diamonds existence (indicates loaded data)
+        has_custom_diamonds = (sprite.diamond_info.extra_diamonds and
+                               len(sprite.diamond_info.extra_diamonds) > 0)
+        
+        # Also check for manual vertices existence
+        has_manual_vertices = (hasattr(sprite, 'has_manual_vertices') and sprite.has_manual_vertices)
+        
+        # Consider it comprehensive if it has sub-diamond data, custom diamonds, or manual vertices
+        comprehensive = has_sub_diamond_data or has_custom_diamonds or has_manual_vertices
+        
+        if comprehensive:
+            print(f"Sprite {getattr(sprite, 'sprite_index', '?')} has comprehensive analysis - skipping re-analysis")
+            print(f"  Sub-diamond data: {has_sub_diamond_data}")
+            print(f"  Custom diamonds: {has_custom_diamonds}")
+            print(f"  Manual vertices: {has_manual_vertices}")
+        
+        return comprehensive
     
     def clear_sprite_info(self):
         """Clear all sprite information displays"""

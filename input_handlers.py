@@ -13,10 +13,10 @@ class InputHandlers:
     def __init__(self, ui_instance):
         """Initialize with reference to the main UI instance"""
         self.ui = ui_instance
-        
+
         # Constants for easy access
-        self.DEFAULT_SPRITESHEET_DIR = r"C:\Users\Tommaso\Documents\Dev\Spriter\tiles\isometric_tiles\blocks"
-        self.DEFAULT_SAVE_DIR = r"C:\Users\Tommaso\Documents\Dev\Spriter\analysis_data"
+        self.DEFAULT_SPRITESHEET_DIR = r"C:\Users\Tommaso\Documents\Dev\IsoSpriter\isometric_tiles"
+        self.DEFAULT_SAVE_DIR = r"C:\Users\Tommaso\Documents\Dev\IsoSpriter\analysis_data"
         
         # Drawing area constants
         self.LEFT_PANEL_WIDTH = 350
@@ -75,6 +75,8 @@ class InputHandlers:
             self.handle_sub_diamond_set_all_false()
         elif event.ui_element == ui_elements['sub_diamond_propagate_rotation_button']:
             self.handle_propagate_rotation()
+        elif event.ui_element == ui_elements['sub_diamond_propagate_direct_button']:
+            self.handle_propagate_direct()
     
     def handle_slider_move(self, event, ui_elements):
         """Handle slider movement events"""
@@ -508,6 +510,18 @@ class InputHandlers:
             print("Please load a spritesheet first before using sub-diamond mode")
             return
         
+        current_sprite = self.ui.model.get_current_sprite()
+        if not current_sprite or not current_sprite.diamond_info:
+            print("No diamond info available for sub-diamond mode")
+            return
+        
+        print(f"\n=== DEBUG SUB-DIAMOND TOGGLE START ===")
+        print(f"Current sprite: {self.ui.model.current_sprite_index}")
+        print(f"Current sub-diamond mode: {self.ui.renderer.sub_diamond_mode}")
+        
+        # Debug: Check sub-diamond data BEFORE toggle
+        self._debug_print_subdiamonds_state("BEFORE TOGGLE", current_sprite)
+        
         # If manual vertex mode is active, turn it off first
         if self.ui.renderer.manual_vertex_mode:
             self.ui.renderer.manual_vertex_mode = False
@@ -530,12 +544,19 @@ class InputHandlers:
             print(f"Editing: {self.ui.renderer.sub_diamond_editing_mode.upper().replace('_', ' ')}")
             print("Controls: F1/F2=Lower/Upper, F3=Cycle Layers, 1=Line of Sight, 2=Walkability")
             print("Left Click=Toggle, Right Click=None")
+            
+            # Debug: Check sub-diamond data AFTER turning ON
+            self._debug_print_subdiamonds_state("AFTER TURNING ON", current_sprite)
         else:
             print("=== SUB-DIAMOND MODE: OFF ===")
         
         # Clear cache and update display
         self.ui.renderer._clear_sprite_display_cache()
         self.ui.update_sprite_info()
+        
+        # Debug: Check sub-diamond data AFTER update_sprite_info
+        self._debug_print_subdiamonds_state("AFTER UPDATE_SPRITE_INFO", current_sprite)
+        print(f"=== DEBUG SUB-DIAMOND TOGGLE END ===\n")
     
     def _update_vertex_info_label(self):
         """Update the vertex selection info label"""
@@ -1469,8 +1490,16 @@ class InputHandlers:
             root.destroy()
             
             if file_path:
+                print(f"\n=== DEBUG LOAD_ANALYSIS_DATA START ===")
+                print(f"Loading from: {file_path}")
+                
                 # Load the model
                 self.ui.model = SpritesheetModel.load_from_json(file_path)
+                
+                print(f"Model loaded, sprites count: {len(self.ui.model.sprites)}")
+                
+                # Debug: Check loaded sub-diamond data for first few sprites
+                self._debug_loaded_subdiamonds()
                 
                 # Try to load the original image
                 if os.path.exists(self.ui.model.image_path):
@@ -1488,14 +1517,61 @@ class InputHandlers:
                 self.ui.analysis_controls_panel.components['threshold_slider'].set_current_value(self.ui.model.alpha_threshold)
                 self.ui.analysis_controls_panel.components['global_z_input'].set_text(str(self.ui.model.upper_z_offset))
                 
+                # Restore manual diamond width settings
+                if hasattr(self.ui.model, 'manual_diamond_width') and self.ui.model.manual_diamond_width is not None:
+                    self.ui.analysis_controls_panel.components['global_diamond_width_input'].set_text(str(self.ui.model.manual_diamond_width))
+                else:
+                    self.ui.analysis_controls_panel.components['global_diamond_width_input'].set_text('')
+                
+                # Restore frame-specific settings for current sprite
+                current_sprite = self.ui.model.get_current_sprite()
+                if current_sprite:
+                    if hasattr(current_sprite, 'manual_diamond_width') and current_sprite.manual_diamond_width is not None:
+                        self.ui.analysis_controls_panel.components['frame_diamond_width_input'].set_text(str(current_sprite.manual_diamond_width))
+                    else:
+                        self.ui.analysis_controls_panel.components['frame_diamond_width_input'].set_text('')
+                
+                # Restore model-based UI states
+                self.ui.analysis_controls_panel.components['overlay_button'].set_text(
+                    f'Toggle Overlay: {"ON" if self.ui.model.show_overlay else "OFF"}'
+                )
+                self.ui.analysis_controls_panel.components['diamond_height_button'].set_text(
+                    f'Diamond Height: {"ON" if self.ui.model.show_diamond_height else "OFF"}'
+                )
+                self.ui.analysis_controls_panel.components['diamond_vertices_button'].set_text(
+                    f'Diamond Vertices: {"ON" if self.ui.model.show_diamond_vertices else "OFF"}'
+                )
+                mode_text = "Midpoint" if self.ui.model.upper_lines_midpoint_mode else "Contact Points"
+                self.ui.analysis_controls_panel.components['upper_lines_mode_button'].set_text(f'Upper Lines: {mode_text}')
+                
                 # Sync custom keypoints from model to renderer
                 self._sync_custom_keypoints_from_model()
                 
                 # Transfer diamond vertices from model to renderer as manual vertices
                 self.ui.model.transfer_vertices_to_manual(self.ui.renderer)
                 
+                # Restore renderer states based on loaded data
+                self._restore_renderer_states_from_loaded_data()
+                
+                # Clear renderer cache to ensure proper redraw with new data
+                self.ui.renderer._clear_sprite_display_cache()
+                
+                # Debug: Check sub-diamond data BEFORE update_sprite_info
+                print(f"\n=== DEBUG: BEFORE update_sprite_info ===")
+                current_sprite = self.ui.model.get_current_sprite()
+                if current_sprite:
+                    self._debug_print_subdiamonds_state("BEFORE update_sprite_info", current_sprite)
+                
                 self.ui.update_sprite_info()
+                
+                # Debug: Check sub-diamond data AFTER update_sprite_info
+                print(f"\n=== DEBUG: AFTER update_sprite_info ===")
+                if current_sprite:
+                    self._debug_print_subdiamonds_state("AFTER update_sprite_info", current_sprite)
+                
                 print(f"Analysis data loaded from: {file_path}")
+                print(f"Restored renderer states and manual vertices for complete functionality")
+                print(f"=== DEBUG LOAD_ANALYSIS_DATA END ===\n")
                 
         except Exception as e:
             print(f"Error loading analysis data: {e}")
@@ -1615,6 +1691,119 @@ class InputHandlers:
                 self.ui.renderer.custom_keypoints[sprite_index] = {}
                 for keypoint_name, point in sprite.custom_keypoints.items():
                     self.ui.renderer.custom_keypoints[sprite_index][keypoint_name] = (point.x, point.y)
+    
+    def _restore_renderer_states_from_loaded_data(self):
+        """Restore renderer states based on loaded model data"""
+        if not self.ui.model:
+            return
+        
+        # Check if any sprites have manual vertices transferred from the model
+        has_manual_vertices = any(
+            sprite_index in self.ui.renderer.manual_vertices and
+            len(self.ui.renderer.manual_vertices[sprite_index]) > 0
+            for sprite_index in range(len(self.ui.model.sprites))
+        )
+        
+        # Check if any sprites have custom keypoints
+        has_custom_keypoints = any(
+            sprite.custom_keypoints for sprite in self.ui.model.sprites
+        )
+        
+        # Check if any sprites have sub-diamond data
+        has_sub_diamonds = any(
+            sprite.diamond_info and (
+                (sprite.diamond_info.lower_diamond and
+                 hasattr(sprite.diamond_info.lower_diamond, 'sub_diamonds') and
+                 sprite.diamond_info.lower_diamond.sub_diamonds) or
+                (sprite.diamond_info.upper_diamond and
+                 hasattr(sprite.diamond_info.upper_diamond, 'sub_diamonds') and
+                 sprite.diamond_info.upper_diamond.sub_diamonds) or
+                (sprite.diamond_info.extra_diamonds and any(
+                    hasattr(diamond, 'sub_diamonds') and diamond.sub_diamonds
+                    for diamond in sprite.diamond_info.extra_diamonds.values()
+                ))
+            )
+            for sprite in self.ui.model.sprites
+        )
+        
+        # Auto-enable manual vertex mode if manual vertices were loaded
+        if has_manual_vertices:
+            self.ui.renderer.manual_vertex_mode = True
+            self.ui.analysis_controls_panel.components['manual_vertex_button'].set_text('Manual Vertex Mode: ON')
+            self.ui.analysis_controls_panel.components['vertex_info_label'].visible = True
+            self.ui.analysis_controls_panel.components['auto_populate_button'].visible = True
+            self.ui.analysis_controls_panel.components['reset_vertices_button'].visible = True
+            self._update_vertex_info_label()
+            print(f"Auto-enabled manual vertex mode (found manual vertices in loaded data)")
+        
+        # Auto-enable custom keypoints mode if custom keypoints were loaded
+        if has_custom_keypoints:
+            self.ui.renderer.custom_keypoints_mode = True
+            self.ui.analysis_controls_panel.components['delete_keypoints_button'].visible = True
+            print(f"Auto-enabled custom keypoints mode (found custom keypoints in loaded data)")
+        
+        # Auto-enable diamond vertices display if we have manual vertices or sub-diamonds
+        if has_manual_vertices or has_sub_diamonds:
+            self.ui.model.show_diamond_vertices = True
+            self.ui.analysis_controls_panel.components['diamond_vertices_button'].set_text('Diamond Vertices: ON')
+            print(f"Auto-enabled diamond vertices display")
+        
+        # Enable renderer visualization flags for better loaded data visibility
+        if has_manual_vertices or has_sub_diamonds:
+            self.ui.renderer.show_diamond_lines = True
+            self.ui.renderer.show_raycast_analysis = True
+            self.ui.analysis_controls_panel.components['diamond_lines_button'].set_text('Diamond Lines: ON')
+            self.ui.analysis_controls_panel.components['raycast_analysis_button'].set_text('Raycast Analysis: ON')
+            print(f"Auto-enabled diamond lines and raycast analysis for better data visualization")
+        
+        # If sub-diamond data exists, inform user about sub-diamond mode availability
+        if has_sub_diamonds:
+            print(f"Sub-diamond data detected. Use F1/F2 or Sub-Diamond Mode button to view/edit.")
+        
+        print(f"Renderer state restoration complete")
+        
+        # Force recalculation of expanded bounds for all sprites with manual vertices
+        self._ensure_expanded_bounds_recalculated()
+    
+    def _ensure_expanded_bounds_recalculated(self):
+        """Ensure expanded bounds are properly calculated for sprites with manual vertices extending beyond bbox"""
+        if not self.ui.model or not self.ui.renderer:
+            return
+        
+        sprites_with_expansions = 0
+        
+        for sprite_index, sprite in enumerate(self.ui.model.sprites):
+            if not sprite.bbox or not sprite.diamond_info:
+                continue
+            
+            # Check if this sprite has manual vertices that might extend beyond bbox
+            manual_data = self.ui.renderer.manual_vertices.get(sprite_index, {})
+            if not manual_data:
+                continue
+            
+            bbox = sprite.bbox
+            has_expansion = False
+            
+            # Check all diamond levels for vertices extending beyond bbox
+            for diamond_level, vertices in manual_data.items():
+                for vertex_name, (abs_x, abs_y) in vertices.items():
+                    # Check if vertex extends beyond original bbox bounds
+                    if (abs_x < bbox.x or abs_x >= bbox.x + bbox.width or
+                        abs_y < bbox.y or abs_y >= bbox.y + bbox.height):
+                        has_expansion = True
+                        break
+                if has_expansion:
+                    break
+            
+            if has_expansion:
+                sprites_with_expansions += 1
+                # The expansion calculation happens automatically in renderer._calculate_expanded_bounds
+                # We just need to ensure the cache is cleared to force recalculation
+                self.ui.renderer._clear_sprite_cache(sprite_index)
+        
+        if sprites_with_expansions > 0:
+            print(f"Detected {sprites_with_expansions} sprites with manual vertices extending beyond bbox")
+            print(f"Expanded canvas bounds will be calculated automatically during rendering")
     
     def _has_manual_vertices_for_sprite(self, sprite_index):
         """Check if a sprite has any manual vertices defined"""
@@ -3206,3 +3395,295 @@ class InputHandlers:
             target_edge.z_portal = source_edge.z_portal
             
             print(f"      {source_edge_name} → {target_edge_name}")
+    
+    def handle_propagate_direct(self):
+        """Propagate sub-diamond properties across all frames without rotation for ALL layers"""
+        if not self.ui.model:
+            print("Please load a spritesheet first before propagating properties")
+            return
+        
+        if not self.ui.renderer.sub_diamond_mode:
+            print("Sub-diamond mode must be active to propagate properties")
+            return
+        
+        current_sprite_index = self.ui.model.current_sprite_index
+        current_sprite = self.ui.model.get_current_sprite()
+        
+        if not current_sprite or not current_sprite.diamond_info:
+            print("Current sprite has no diamond data to propagate")
+            return
+        
+        # Collect ALL layers with sub-diamond data from source frame
+        source_layers = []
+        
+        # Check lower diamond
+        if current_sprite.diamond_info.lower_diamond and hasattr(current_sprite.diamond_info.lower_diamond, 'sub_diamonds'):
+            current_sprite.diamond_info.lower_diamond.ensure_sub_diamonds_initialized()
+            if current_sprite.diamond_info.lower_diamond.sub_diamonds:
+                source_layers.append(('lower', current_sprite.diamond_info.lower_diamond))
+        
+        # Check upper diamond
+        if current_sprite.diamond_info.upper_diamond and hasattr(current_sprite.diamond_info.upper_diamond, 'sub_diamonds'):
+            current_sprite.diamond_info.upper_diamond.ensure_sub_diamonds_initialized()
+            if current_sprite.diamond_info.upper_diamond.sub_diamonds:
+                source_layers.append(('upper', current_sprite.diamond_info.upper_diamond))
+        
+        # Check custom diamonds
+        if current_sprite.diamond_info.extra_diamonds:
+            for custom_name, custom_diamond in current_sprite.diamond_info.extra_diamonds.items():
+                if hasattr(custom_diamond, 'sub_diamonds'):
+                    custom_diamond.ensure_sub_diamonds_initialized()
+                    if custom_diamond.sub_diamonds:
+                        source_layers.append((custom_name, custom_diamond))
+        
+        if not source_layers:
+            print("No layers with sub-diamond data available for propagation")
+            return
+        
+        print(f"\n=== PROPAGATING ALL LAYERS TO ALL FRAMES (DIRECT) ===")
+        print(f"Source frame: {current_sprite_index}")
+        print(f"Total frames: {len(self.ui.model.sprites)}")
+        print(f"Layers to propagate: {[layer_name for layer_name, _ in source_layers]}")
+        
+        # Track successful propagations
+        total_propagations = 0
+        successful_propagations = 0
+        
+        # First, ensure all target frames are analyzed
+        print(f"Ensuring all frames are analyzed...")
+        for target_frame_index in range(len(self.ui.model.sprites)):
+            if target_frame_index == current_sprite_index:
+                continue  # Skip source frame
+            
+            target_sprite = self.ui.model.sprites[target_frame_index]
+            if not target_sprite:
+                continue
+            
+            # Analyze target frame if not already analyzed
+            if not target_sprite.diamond_info:
+                print(f"  Analyzing frame {target_frame_index}...")
+                self.ui.analyzer.analyze_sprite(target_frame_index)
+                
+                if not target_sprite.diamond_info:
+                    print(f"  Warning: Failed to analyze frame {target_frame_index}")
+                    continue
+        
+        # Now propagate all layers to all other frames
+        for target_frame_index in range(len(self.ui.model.sprites)):
+            if target_frame_index == current_sprite_index:
+                continue  # Skip source frame
+            
+            target_sprite = self.ui.model.sprites[target_frame_index]
+            if not target_sprite:
+                continue
+            
+            # No rotation steps - direct copy to same quadrants
+            rotation_steps = 0
+            
+            print(f"\nPropagating to frame {target_frame_index} (direct copy - no rotation)")
+            
+            # Propagate each layer
+            frame_success_count = 0
+            for layer_name, source_diamond_data in source_layers:
+                total_propagations += 1
+                
+                # Create or get target diamond data
+                if self._create_custom_diamond_for_frame(target_sprite, layer_name, source_diamond_data):
+                    # Apply direct mapping (rotation_steps = 0)
+                    if self._apply_rotation_mapping(target_sprite, layer_name, source_diamond_data, rotation_steps):
+                        successful_propagations += 1
+                        frame_success_count += 1
+                        print(f"  ✓ {layer_name} layer propagated")
+                    else:
+                        print(f"  ✗ Failed to apply direct mapping to {layer_name} layer")
+                else:
+                    print(f"  ✗ Failed to create {layer_name} layer")
+            
+            print(f"Frame {target_frame_index}: {frame_success_count}/{len(source_layers)} layers successful")
+        
+        # Clear cache and update display
+        self.ui.renderer._clear_sprite_display_cache()
+        self.ui.update_sprite_info()
+        
+        print(f"\n=== DIRECT PROPAGATION COMPLETE ===")
+        print(f"Successfully propagated {successful_propagations}/{total_propagations} layer instances")
+        print(f"Across {len(self.ui.model.sprites)-1} target frames")
+        print(f"Properties copied to same quadrants without rotation")
+    
+    def _debug_print_subdiamonds_state(self, stage, current_sprite):
+        """Debug method to print comprehensive sub-diamond state information"""
+        print(f"\n=== SUB-DIAMOND DEBUG: {stage} ===")
+        
+        if not current_sprite or not current_sprite.diamond_info:
+            print("No sprite or diamond_info available")
+            return
+        
+        diamond_info = current_sprite.diamond_info
+        
+        # Check lower diamond
+        if diamond_info.lower_diamond:
+            print(f"LOWER DIAMOND:")
+            print(f"  Has sub_diamonds attr: {hasattr(diamond_info.lower_diamond, 'sub_diamonds')}")
+            if hasattr(diamond_info.lower_diamond, 'sub_diamonds'):
+                sub_diamonds = diamond_info.lower_diamond.sub_diamonds
+                print(f"  Sub_diamonds initialized: {sub_diamonds is not None}")
+                if sub_diamonds:
+                    print(f"  Sub_diamonds count: {len(sub_diamonds)}")
+                    for direction, sub_diamond in sub_diamonds.items():
+                        walkable = getattr(sub_diamond, 'is_walkable', 'NO_ATTR')
+                        print(f"    {direction}: walkable={walkable}")
+                        # Check edge properties
+                        for edge_name in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+                            edge = getattr(sub_diamond, edge_name, None)
+                            if edge:
+                                los = getattr(edge, 'blocks_line_of_sight', 'NO_ATTR')
+                                mov = getattr(edge, 'blocks_movement', 'NO_ATTR')
+                                z_portal = getattr(edge, 'z_portal', 'NO_ATTR')
+                                print(f"      {edge_name}: los={los}, mov={mov}, z_portal={z_portal}")
+                else:
+                    print("  Sub_diamonds is None or empty")
+        else:
+            print("LOWER DIAMOND: None")
+        
+        # Check upper diamond
+        if diamond_info.upper_diamond:
+            print(f"UPPER DIAMOND:")
+            print(f"  Has sub_diamonds attr: {hasattr(diamond_info.upper_diamond, 'sub_diamonds')}")
+            if hasattr(diamond_info.upper_diamond, 'sub_diamonds'):
+                sub_diamonds = diamond_info.upper_diamond.sub_diamonds
+                print(f"  Sub_diamonds initialized: {sub_diamonds is not None}")
+                if sub_diamonds:
+                    print(f"  Sub_diamonds count: {len(sub_diamonds)}")
+                    for direction, sub_diamond in sub_diamonds.items():
+                        walkable = getattr(sub_diamond, 'is_walkable', 'NO_ATTR')
+                        print(f"    {direction}: walkable={walkable}")
+                        # Check edge properties
+                        for edge_name in ['north_west_edge', 'north_east_edge', 'south_west_edge', 'south_east_edge']:
+                            edge = getattr(sub_diamond, edge_name, None)
+                            if edge:
+                                los = getattr(edge, 'blocks_line_of_sight', 'NO_ATTR')
+                                mov = getattr(edge, 'blocks_movement', 'NO_ATTR')
+                                z_portal = getattr(edge, 'z_portal', 'NO_ATTR')
+                                print(f"      {edge_name}: los={los}, mov={mov}, z_portal={z_portal}")
+                else:
+                    print("  Sub_diamonds is None or empty")
+        else:
+            print("UPPER DIAMOND: None")
+        
+        # Check custom diamonds
+        if diamond_info.extra_diamonds:
+            print(f"CUSTOM DIAMONDS: {len(diamond_info.extra_diamonds)}")
+            for custom_name, custom_diamond in diamond_info.extra_diamonds.items():
+                print(f"  {custom_name.upper()}:")
+                print(f"    Has sub_diamonds attr: {hasattr(custom_diamond, 'sub_diamonds')}")
+                if hasattr(custom_diamond, 'sub_diamonds'):
+                    sub_diamonds = custom_diamond.sub_diamonds
+                    print(f"    Sub_diamonds initialized: {sub_diamonds is not None}")
+                    if sub_diamonds:
+                        print(f"    Sub_diamonds count: {len(sub_diamonds)}")
+                        for direction, sub_diamond in sub_diamonds.items():
+                            walkable = getattr(sub_diamond, 'is_walkable', 'NO_ATTR')
+                            print(f"      {direction}: walkable={walkable}")
+                    else:
+                        print("    Sub_diamonds is None or empty")
+        else:
+            print("CUSTOM DIAMONDS: None")
+        
+        print(f"=== END SUB-DIAMOND DEBUG: {stage} ===")
+    
+    def _debug_loaded_subdiamonds(self):
+        """Debug method to check sub-diamond data immediately after loading from JSON"""
+        print(f"\n=== DEBUG LOADED SUB-DIAMONDS ===")
+        
+        if not self.ui.model or not self.ui.model.sprites:
+            print("No model or sprites loaded")
+            return
+        
+        sprites_with_subdiamonds = 0
+        total_subdiamonds = 0
+        
+        # Check first 5 sprites for detailed info
+        for i, sprite in enumerate(self.ui.model.sprites[:5]):
+            if not sprite.diamond_info:
+                print(f"Sprite {i}: No diamond_info")
+                continue
+            
+            print(f"Sprite {i}:")
+            sprite_subdiamonds = 0
+            
+            # Check lower diamond
+            if sprite.diamond_info.lower_diamond and hasattr(sprite.diamond_info.lower_diamond, 'sub_diamonds'):
+                sub_diamonds = sprite.diamond_info.lower_diamond.sub_diamonds
+                if sub_diamonds:
+                    sprite_subdiamonds += len(sub_diamonds)
+                    print(f"  Lower: {len(sub_diamonds)} sub-diamonds")
+                    # Sample one sub-diamond for detail
+                    if 'north' in sub_diamonds:
+                        north_sub = sub_diamonds['north']
+                        walkable = getattr(north_sub, 'is_walkable', 'NO_ATTR')
+                        print(f"    North: walkable={walkable}")
+                        # Check edges
+                        nw_edge = getattr(north_sub, 'north_west_edge', None)
+                        if nw_edge:
+                            los = getattr(nw_edge, 'blocks_line_of_sight', 'NO_ATTR')
+                            mov = getattr(nw_edge, 'blocks_movement', 'NO_ATTR')
+                            z_portal = getattr(nw_edge, 'z_portal', 'NO_ATTR')
+                            print(f"      NW edge: los={los}, mov={mov}, z_portal={z_portal}")
+                else:
+                    print(f"  Lower: sub_diamonds is None/empty")
+            else:
+                print(f"  Lower: No sub_diamonds attribute")
+            
+            # Check upper diamond
+            if sprite.diamond_info.upper_diamond and hasattr(sprite.diamond_info.upper_diamond, 'sub_diamonds'):
+                sub_diamonds = sprite.diamond_info.upper_diamond.sub_diamonds
+                if sub_diamonds:
+                    sprite_subdiamonds += len(sub_diamonds)
+                    print(f"  Upper: {len(sub_diamonds)} sub-diamonds")
+                else:
+                    print(f"  Upper: sub_diamonds is None/empty")
+            else:
+                print(f"  Upper: No sub_diamonds or no upper diamond")
+            
+            # Check custom diamonds
+            if sprite.diamond_info.extra_diamonds:
+                for custom_name, custom_diamond in sprite.diamond_info.extra_diamonds.items():
+                    if hasattr(custom_diamond, 'sub_diamonds') and custom_diamond.sub_diamonds:
+                        sprite_subdiamonds += len(custom_diamond.sub_diamonds)
+                        print(f"  {custom_name}: {len(custom_diamond.sub_diamonds)} sub-diamonds")
+            
+            if sprite_subdiamonds > 0:
+                sprites_with_subdiamonds += 1
+                total_subdiamonds += sprite_subdiamonds
+                print(f"  Total sprite sub-diamonds: {sprite_subdiamonds}")
+            else:
+                print(f"  No sub-diamonds found")
+        
+        # Quick count for all sprites
+        total_sprites_with_data = 0
+        for sprite in self.ui.model.sprites:
+            if sprite.diamond_info:
+                has_subdiamonds = False
+                if (sprite.diamond_info.lower_diamond and
+                    hasattr(sprite.diamond_info.lower_diamond, 'sub_diamonds') and
+                    sprite.diamond_info.lower_diamond.sub_diamonds):
+                    has_subdiamonds = True
+                if (sprite.diamond_info.upper_diamond and
+                    hasattr(sprite.diamond_info.upper_diamond, 'sub_diamonds') and
+                    sprite.diamond_info.upper_diamond.sub_diamonds):
+                    has_subdiamonds = True
+                if sprite.diamond_info.extra_diamonds:
+                    for custom_diamond in sprite.diamond_info.extra_diamonds.values():
+                        if (hasattr(custom_diamond, 'sub_diamonds') and
+                            custom_diamond.sub_diamonds):
+                            has_subdiamonds = True
+                            break
+                if has_subdiamonds:
+                    total_sprites_with_data += 1
+        
+        print(f"\nSUMMARY:")
+        print(f"  Total sprites: {len(self.ui.model.sprites)}")
+        print(f"  Sprites with sub-diamond data: {total_sprites_with_data}")
+        print(f"  First 5 sprites with sub-diamonds: {sprites_with_subdiamonds}")
+        print(f"  Total sub-diamonds in first 5: {total_subdiamonds}")
+        print(f"=== END DEBUG LOADED SUB-DIAMONDS ===")
